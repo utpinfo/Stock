@@ -1,0 +1,6 @@
+yfinance
+lxml
+bs4
+requests
+pandas
+pymysql
