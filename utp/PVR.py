@@ -2,7 +2,7 @@ import math
 from datetime import datetime
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # 开源的数据分析和数据处理库
 import seaborn as sns
 from matplotlib import pyplot as plt
 
@@ -15,11 +15,12 @@ codes = MySQL.get_stock('90')  # 1513, 2301, 1513,6285,4974
 sns.set(style="whitegrid")  # 设置Seaborn默认样式
 
 display_matplot = 1  # 折綫圖顯示(1:顯示), 找股模式(0.不顯示)
-rec_days = 1  # 檢測近幾個交易日内
+rec_days = 7  # 檢測近幾個交易日内
 rec_volume = 1000  # 檢核量如果過小， 不精準
 rec_stocks = []
 
 
+# 正反趨勢判斷
 def is_trend(seq):
     n = len(seq)
     total_increase = 0
@@ -43,6 +44,9 @@ def is_trend(seq):
         return 0, msg
 
 
+# 相對強弱指標(RSI值越大，表示在過去一段期間，上漲機率較大；相反的，RSI值越小，表示過去一段期間，下跌機率較大)
+# 大於70(過熱) 小於30(過冷)
+# (公式: 上升幅度的合計 / 上升幅度的合計 + 下跌幅度的合計)
 def calculate_rsi(data, window=14):
     delta = data['price'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
@@ -84,7 +88,7 @@ def plot_stock(stock_code, stock_name, df):
 
     # 连接鼠标移动事件
     plt.gcf().canvas.mpl_connect('motion_notify_event', lambda event: on_mouse_move(event, df))
-    plt.rcParams['font.sans-serif'] = ['SimHei']  # 指定默认字体为中文宋体
+    plt.rcParams['font.sans-serif'] = ['Heiti TC']  # 指定默认字体为中文宋体
     plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示为方块的问题
     # plt.grid(True)  # 添加网格
     # plt.gca().set_facecolor('lightgrey')  # 修改背景颜色为浅灰色
@@ -120,6 +124,8 @@ def plot_stock(stock_code, stock_name, df):
     sns.lineplot(x=x, y=v_5_ma, color='#EE82EE', label='5日均量', linewidth=1, linestyle='dashed')
     sns.lineplot(x=x, y=v_10_ma, color='#87CEEB', label='10日均量', linewidth=1, linestyle='dashed')
     sns.lineplot(x=x, y=v_15_ma, color='#1E90FF', label='15日均量', linewidth=1, linestyle='dashed')
+    sns.lineplot(x=x, y=df['RSI'] - 100, color='#8B0000', label='RSI (>70(過熱) <30(過冷))', linewidth=1,
+                 linestyle='dashed')  # 下移100, 顯示比較明顯
     # print(price_15_ma)
     # plt.tight_layout()  # 调整子图布局
     # begin MACD 藍轉紅(買）
@@ -206,14 +212,15 @@ for idx, master in enumerate(codes):
 
     # data_with_str_dates = [{**item, 'price_date': str(item['price_date'])} for item in details]
     # print(details)
-    df = pd.DataFrame(details)
+    df = pd.DataFrame(details)  # 二維表格操作（類似 Excel）
+    # 一次性初始化所有行
+    df['diff_pvr'] = 0
+    df['avg_pvr'] = 0
+    df['amp_pvr'] = 0
+    df['ind'] = 0
+    df['volume'] = df['volume'] / 1000
+    df['result'] = ""
     for idx, detail in df.iterrows():
-        df.at[idx, 'diff_pvr'] = 0
-        df.at[idx, 'avg_pvr'] = 0
-        df.at[idx, 'amp_pvr'] = 0
-        df.at[idx, 'ind'] = 0
-        df.at[idx, 'volume'] = df.at[idx, 'volume'] / 1000  # 總筆數
-        msg = ""
         tol_cnt = tol_cnt + 1
         cur_date = str(df.at[idx, 'price_date'])
         cur_price = float(df.at[idx, 'price'])
@@ -324,38 +331,38 @@ for idx, master in enumerate(codes):
             # T:有能無量， T+1:有量則漲
             if df.at[idx, 'MACD_DIRECTION'] > 0:
                 if round(df.at[idx, 'MACD']) > 2 and df.at[idx, 'DIF'] < df.at[idx, 'DEA']:
-                    msg = "* 0買入時機"
+                    df.at[idx, 'result'] = "* 0買入時機"
                     df.at[idx, 'ind'] = 1
                     volume_after_extra_prv = []
                     volume_after_extra_prv.append(cur_volume)
                 elif round(df.at[idx, 'MACD']) <= 2 and df.at[idx, '5_V_MA'] < (
                         df.at[idx, '10_V_MA'] * 1.5):  # 前期量減(偏差值0.2)
-                    msg = "* 1買入時機"
+                    df.at[idx, 'result'] = "* 1買入時機"
                     df.at[idx, 'ind'] = 1
                     volume_after_extra_prv = []
                     volume_after_extra_prv.append(cur_volume)
                 elif df.at[idx, '5_V_MA'] < (df.at[idx, '15_V_MA']):  # 前期量減(偏差值0.2)
-                    msg = "* 2買入時機"
+                    df.at[idx, 'result'] = "* 2買入時機"
                     df.at[idx, 'ind'] = 1
                     volume_after_extra_prv = []
                     volume_after_extra_prv.append(cur_volume)
                 elif round(df.at[idx, 'MACD']) > 2 and df.at[idx, 'DIF'] > df.at[idx, 'DEA']:
-                    msg = "* 11賣出時機(1.拉高出貨)"
+                    df.at[idx, 'result'] = "* 11賣出時機(1.拉高出貨)"
                     df.at[idx, 'ind'] = -1
                 elif cur_volume > (df.at[idx, '15_V_MA'] * 3):
-                    msg = "* 3賣出時機(1.拉高出貨)"
+                    df.at[idx, 'result'] = "* 3賣出時機(1.拉高出貨)"
                     df.at[idx, 'ind'] = -1
             else:
                 if df.at[idx, '5_V_MA'] < (df.at[idx, '15_V_MA']):  # 前期量減(偏差值0.2)
-                    msg = "* 2買入時機"
+                    df.at[idx, 'result'] = "* 2買入時機"
                     df.at[idx, 'ind'] = 1
                     volume_after_extra_prv = []
                     volume_after_extra_prv.append(cur_volume)
                 elif round(df.at[idx, 'MACD']) > 2 and df.at[idx, 'DIF'] > df.at[idx, 'DEA']:
-                    msg = "* 3賣出時機(1.拉高出貨)"
+                    df.at[idx, 'result'] = "* 3賣出時機(1.拉高出貨)"
                     df.at[idx, 'ind'] = -1
                 elif cur_volume > (df.at[idx, '15_V_MA'] * 3):
-                    msg = "* 4賣出時機(1.拉高出貨)"
+                    df.at[idx, 'result'] = "* 4賣出時機(1.拉高出貨)"
                     df.at[idx, 'ind'] = -1
             current_date = datetime.now()
             # 计算日期差
@@ -363,7 +370,7 @@ for idx, master in enumerate(codes):
             if date_difference.days <= rec_days:
                 if avg_volume >= rec_volume:
                     if df.at[idx, 'ind'] == 1:
-                        msg = f"股票:{stock_code},{rec_days}日内存在買入時機"
+                        df.at[idx, 'result'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
                         stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
                         if not stock_exists:
                             rec_stocks.append(
@@ -373,33 +380,37 @@ for idx, master in enumerate(codes):
             volume_after_extra_prv.append(cur_volume)
             if cur_volume <= (sum(volume_after_extra_prv) / len(volume_after_extra_prv)) * 0.5:
                 # 量小於15均量, 則能量耗盡:看空
-                msg = "* 賣出時機(2.拉高出貨)" + msg
+                df.at[idx, 'result'] = "* 賣出時機(2.拉高出貨)" + df.at[idx, 'result']
                 df.at[idx, 'ind'] = -1
         print("######################################################################################")
-        if msg != "":
-            msg = f"{msg}, "
-        msg = f"{msg}日期:{cur_date}, 股票:{stock_code}"
-        print(msg)
-        msg = f"日期:{cur_date}, RSI:{df.at[idx, 'RSI']} PVR(波動):{amp_pvr}"
-        print(msg)
-        msg = f"日期:{cur_date}, 動能:{diff_pvr} (5均能:{df.at[idx, '5_E_MA']}, 10均能:{df.at[idx, '10_E_MA']}, 15均能:{df.at[idx, '15_E_MA']})"
-        print(msg)
-        msg = f"日期:{cur_date}, 股價:{cur_price}, 差價:{diff_price} (5均價:{df.at[idx, '5_MA']}, 10均價:{df.at[idx, '10_MA']}, 15均價:{df.at[idx, '15_MA']})"
-        print(msg)
-        msg = f"日期:{cur_date}, 股量:{cur_volume}, 差量:{diff_volume}, (5均量:{df.at[idx, '5_V_MA']}, 10均量:{df.at[idx, '10_V_MA']}, 15均量:{df.at[idx, '15_V_MA']})"
-        print(msg)
+        if df.at[idx, 'result'] != "":
+            df.at[idx, 'result'] = f"{df.at[idx, 'result']}, "
+        df.at[idx, 'result'] = f"{df.at[idx, 'result']}日期:{cur_date}, 股票:{stock_code}"
+        print(df.at[idx, 'result'])
+        df.at[idx, 'result'] = f"日期:{cur_date}, RSI:{df.at[idx, 'RSI']} PVR(波動):{amp_pvr}"
+        print(df.at[idx, 'result'])
+        df.at[
+            idx, 'result'] = f"日期:{cur_date}, 動能:{diff_pvr} (5均能:{df.at[idx, '5_E_MA']}, 10均能:{df.at[idx, '10_E_MA']}, 15均能:{df.at[idx, '15_E_MA']})"
+        print(df.at[idx, 'result'])
+        df.at[
+            idx, 'result'] = f"日期:{cur_date}, 股價:{cur_price}, 差價:{diff_price} (5均價:{df.at[idx, '5_MA']}, 10均價:{df.at[idx, '10_MA']}, 15均價:{df.at[idx, '15_MA']})"
+        print(df.at[idx, 'result'])
+        df.at[
+            idx, 'result'] = f"日期:{cur_date}, 股量:{cur_volume}, 差量:{diff_volume}, (5均量:{df.at[idx, '5_V_MA']}, 10均量:{df.at[idx, '10_V_MA']}, 15均量:{df.at[idx, '15_V_MA']})"
+        print(df.at[idx, 'result'])
         # print(f"日期:{cur_date}, 當量:{cur_volume}，均量{sum(volume_after_extra_prv) / len(volume_after_extra_prv)}")
-        msg = f"日期:{cur_date}, 趨勢:{macd_msg}"
-        print(msg)
-        msg = f"日期:{cur_date}, MACD:{df.at[idx, 'MACD']}, DIF:{df.at[idx, 'DIF']}, DEA:{df.at[idx, 'DEA']}, 方向{df.at[idx, 'MACD_DIRECTION']}"
-        print(msg)
+        df.at[idx, 'result'] = f"日期:{cur_date}, 趨勢:{macd_msg}"
+        print(df.at[idx, 'result'])
+        df.at[
+            idx, 'result'] = f"日期:{cur_date}, MACD:{df.at[idx, 'MACD']}, DIF:{df.at[idx, 'DIF']}, DEA:{df.at[idx, 'DEA']}, 方向{df.at[idx, 'MACD_DIRECTION']}"
+        print(df.at[idx, 'result'])
     if tol_cnt > 0:
         if tgt_price:
             est_price = round(sum(tgt_price) / len(tgt_price), decimal_place)
         if est_price:
             print(f"股票:{stock_code}, 指標價:{est_price} ,均價:{avg_price}, 當前股價:{cur_price}")
             print("######################################################################################")
-
+    print(df.to_string())
     if display_matplot == 1:
         # 繪製圖案
         plot_stock(stock_code, stock_name, df)

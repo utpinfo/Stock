@@ -1,10 +1,12 @@
 import calendar
 import datetime
-
 import requests
 from bs4 import BeautifulSoup
-
 from utp import MySQL
+"""
+奇摩頁面, 獲取EPS(單位盈餘)
+奇摩頁面, 獲取REVENUE(營收)
+"""
 
 domain = 'https://tw.stock.yahoo.com/quote'
 

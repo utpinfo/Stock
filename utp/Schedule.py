@@ -8,7 +8,7 @@ import YahooStockInfo
 
 # 獲取3年股價/成交量
 def DailySchedule(stock_code, isin_code, start_date=(datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")):
-    #start_date = "2021-03-01"
+    start_date = "2023-03-01"
     end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
     print(f"stock_code:{stock_code}, isin_code:{isin_code}, start_date:{start_date}, end_date:{end_date}")
     rows = yf.Ticker(isin_code).history(start=start_date, end=end_date)

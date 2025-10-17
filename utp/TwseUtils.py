@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from utp import MySQL
 
 # 获取台湾股票列表数据的网址
-url = 'https://isin.twse.com.tw/isin/C_public.jsp?strMode=2'
+url = 'https://isin.twse.com.tw/isin/C_public.jsp?strMode=4'
 """
 "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",  # 上市證券
 "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",  # 上櫃證券
