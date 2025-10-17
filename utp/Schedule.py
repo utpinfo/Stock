@@ -8,9 +8,16 @@ import YahooStockInfo
 
 # 獲取3年股價/成交量
 def DailySchedule(stock_code, isin_code, start_date=(datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")):
-    start_date = "2023-03-01"
+    #start_date = "2023-03-01"
     end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-    print(f"stock_code:{stock_code}, isin_code:{isin_code}, start_date:{start_date}, end_date:{end_date}")
+    data = MySQL.get_price(stock_code, None, 'asc', start_date, end_date)
+
+    if len(data) > 0:
+        print(f"stock_code:{stock_code}, isin_code:{isin_code}, start_date:{start_date}, end_date:{end_date} (DB已存在)")
+        return
+    else:
+        print(f"stock_code:{stock_code}, isin_code:{isin_code}, start_date:{start_date}, end_date:{end_date} (API調用)")
+
     rows = yf.Ticker(isin_code).history(start=start_date, end=end_date)
     for date, row in rows.iterrows():
         price_date = str(date.date())

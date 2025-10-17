@@ -41,12 +41,36 @@ def add_stock(stock_code, stock_name, stock_kind, isin_code):
     helper.close()
 
 
-def get_price(stock_code, limit, sort='asc'):
+def get_price(stock_code, limit, sort='asc', b_price_date=None, e_price_date=None):
     helper = MySQLHelper(host='127.0.0.1', user='root', password='', database='stock')
     helper.connect()
-    sql = "select stock_code, price_date, price, volume from (select * from price where stock_code = %s order by price_date desc limit %s) as t order by t.price_date " + sort
-    params = (stock_code, limit)
-    data = helper.execute_query(sql, params)
+    sql = """
+        SELECT stock_code, price_date, price, volume
+        FROM (
+            SELECT *
+            FROM price
+            WHERE stock_code = %s
+    """
+    params = [stock_code]
+    # 如果提供 price_date，加入過濾
+    if b_price_date:
+        sql += " AND price_date >= %s"
+        params.append(b_price_date)
+
+    if e_price_date:
+        sql += " AND price_date <= %s"
+        params.append(e_price_date)
+    # 內層排序與限制筆數
+    if limit:
+        sql += " ORDER BY price_date DESC LIMIT %s"
+        params.append(limit)
+    else:
+        sql += " ORDER BY price_date DESC"
+
+    # 外層排序
+    sql += ") AS t ORDER BY t.price_date " + sort
+
+    data = helper.execute_query(sql, tuple(params))
     helper.close()
     return data
 

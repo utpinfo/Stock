@@ -25,7 +25,7 @@ for chunk in chunks:
         thread = threading.Thread(target=get_daily_schedule, args=(code['stock_code'], code['isin_code'],))
         thread.start()
         threads.append(thread)
-        time.sleep(3)  # 在发送每个请求之间增加 0.5 秒的延迟
+        time.sleep(0.5)  # 在发送每个请求之间增加 0.5 秒的延迟
 
 # 等待所有線程結束
 for thread in threads:

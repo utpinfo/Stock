@@ -12,7 +12,7 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock('00', '6278')  # 股票列表
+codes = MySQL.get_stock(stock_status=None, stock_code='6278')  # 股票列表
 sns.set(style="whitegrid")
 
 display_matplot = 1  # 是否顯示圖表
