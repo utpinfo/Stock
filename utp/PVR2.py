@@ -59,7 +59,7 @@ def calculate_rsi_wilder(df, column='price', period=14):
 
 
 # ===================== 向量化計算 MACD =====================
-def calculate_macd(prices):
+def calc_macd(prices):
     ema12 = prices.ewm(span=12, adjust=False).mean()
     ema26 = prices.ewm(span=26, adjust=False).mean()
     DIF = ema12 - ema26
@@ -69,7 +69,7 @@ def calculate_macd(prices):
 
 
 # ===================== 計算各種均線 =====================
-def calculate_moving_averages(df):
+def calc_ma(df):
     for p in [5, 10, 15]:
         df[f'{p}_MA'] = df['price'].rolling(p).mean()
         df[f'{p}_V_MA'] = df['volume'].rolling(p).mean()
@@ -99,158 +99,148 @@ def is_trend(seq):
 
 # 定义鼠标移动事件处理程序
 def on_mouse_move(event, df, ax1, ax2, ax3, ax4, stock_code, stock_name, est_price, avg_price):
-    """滑鼠移動事件：顯示游標位置資訊"""
-    if event.inaxes is None:
+    """滑鼠移動事件：在所有子圖同步顯示指示線，橫線對應各軸資料"""
+    if event.inaxes is None or event.xdata is None:
         return
 
-    # 初始化列表
-    if not hasattr(ax1, '_indicator_lines'):
-        ax1._indicator_lines = []
-    if not hasattr(ax1, '_indicator_texts'):
-        ax1._indicator_texts = []
+    axes = [ax1, ax2, ax3]  # 如果含正負資料, 可不寫入
 
-    # 只在價格圖 ax1 上顯示指示線和文字
-    if event.inaxes != ax1:
-        # 隱藏舊指示線
-        for l in ax1._indicator_lines:
-            try:
-                l.remove()
-            except Exception:
-                pass
-        ax1._indicator_lines = []
-
-        for t in ax1._indicator_texts:
-            try:
-                t.remove()
-            except Exception:
-                pass
-        ax1._indicator_texts = []
-
-        event.canvas.draw_idle()
-        return
-
-    # 清除舊指示線與文字
-    for l in ax1._indicator_lines:
-        try:
-            l.remove()
-        except Exception:
-            pass
-    ax1._indicator_lines = []
-
-    for t in ax1._indicator_texts:
-        try:
-            t.remove()
-        except Exception:
-            pass
-    ax1._indicator_texts = []
-
-    # 畫新指示線
-    idx = int(event.xdata)
+    # 計算索引
+    idx = int(round(event.xdata))
     if idx < 0 or idx >= len(df):
         return
 
     cur = df.iloc[idx]
-    cur_date = cur['price_date']
-    cur_price = cur['price']
-    cur_volume = cur['volume']
-    diff_pvr = cur['diff_pvr']
+
+    # 各軸對應資料
+    y_values = {
+        ax1: cur['price'],
+        ax2: cur['volume'],
+        ax3: cur['RSI'],
+    }
 
     # 壓力/支撐
-    press_top_data = df[(df['ind'] != 0) & (df['price'] > cur_price) & (df['price_date'] < cur_date)]
-    press_low_data = df[(df['ind'] != 0) & (df['price'] < cur_price) & (df['price_date'] < cur_date)]
-    press_top_price = press_top_data.iloc[-1]['price'] if len(press_top_data) > 0 else 0
-    press_low_price = press_low_data.iloc[-1]['price'] if len(press_low_data) > 0 else 0
+    press_top = df[(df['ind'] != 0) & (df['price'] > cur['price']) & (df['price_date'] < cur['price_date'])]
+    press_low = df[(df['ind'] != 0) & (df['price'] < cur['price']) & (df['price_date'] < cur['price_date'])]
+    press_top_price = press_top.iloc[-1]['price'] if not press_top.empty else 0
+    press_low_price = press_low.iloc[-1]['price'] if not press_low.empty else 0
 
-    # 畫指示線
-    hline = ax1.axhline(y=event.ydata, color='gray', linestyle='--', alpha=0.6)
-    vline = ax1.axvline(x=event.xdata, color='gray', linestyle='--', alpha=0.6)
-    ax1._indicator_lines = [hline, vline]
+    for ax in axes:
+        # 初始化屬性
+        ax._indicator_lines = getattr(ax, '_indicator_lines', [])
+        ax._indicator_texts = getattr(ax, '_indicator_texts', [])
 
-    # 顯示文字
-    msg = (f"日期: {cur_date}\n"
-           f"PVR: {diff_pvr:.2f}\n"
-           f"價格: {cur_price:.2f}, 量: {cur_volume}\n"
-           f"(壓力: {press_top_price:.2f} 支撐: {press_low_price:.2f})")
-    text = ax1.text(0.98, 0.98, msg, ha='right', va='top', transform=ax1.transAxes,
-                    color='red', fontsize=10, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
-    ax1._indicator_texts = [text]
+        # 清除舊線
+        for l in ax._indicator_lines:
+            l.remove()
+        ax._indicator_lines.clear()
+
+        # 清除文字只在 ax1
+        if ax is ax1:
+            for t in ax._indicator_texts:
+                t.remove()
+            ax._indicator_texts.clear()
+
+        # 畫線
+        hline = ax.axhline(y=y_values.get(ax, 0), color='gray', linestyle='--', alpha=0.6)
+        vline = ax.axvline(x=idx, color='gray', linestyle='--', alpha=0.6)
+        ax._indicator_lines = [hline, vline]
+
+        # 文字只在 ax1 顯示
+        if ax is ax1:
+            msg = (f"日期: {cur['price_date']}\n"
+                   f"PVR: {cur['diff_pvr']:.2f}\n"
+                   f"價格: {cur['price']:.2f}, 量: {cur['volume']}\n"
+                   f"(壓力: {press_top_price:.2f} 支撐: {press_low_price:.2f})")
+            text = ax.text(0.98, 0.98, msg, ha='right', va='top', transform=ax.transAxes,
+                           color='red', fontsize=10, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+            ax._indicator_texts = [text]
 
     # 更新標題
     ax1.set_title(
-        f"{stock_name}({stock_code}) | 指標價:{est_price} 均價:{avg_price} 價:{cur_price} 量:{cur_volume} "
-        f"(壓:{press_top_price} 支:{press_low_price})"
+        f"{stock_name}({stock_code}) | 指標價:{est_price} 均價:{avg_price} "
+        f"價:{cur['price']} 量:{cur['volume']} (壓:{press_top_price} 支:{press_low_price})"
     )
 
     event.canvas.draw_idle()
 
+
 # ===================== 畫圖 =====================
-from matplotlib.gridspec import GridSpec
-
-
 def plot_stock(stock_code, stock_name, df, est_price, avg_price):
-    fig = plt.figure(figsize=(12, 10))
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
+    fig = plt.figure(figsize=(12, 12))
     plt.get_current_fig_manager().set_window_title('買賣建議')
     plt.rcParams['font.sans-serif'] = ['Heiti TC']
 
-    # GridSpec: 四層圖
-    gs = GridSpec(4, 1, height_ratios=[3, 1, 1, 1], hspace=0.05)
-    ax1 = fig.add_subplot(gs[0])  # 價格圖
-    ax2 = fig.add_subplot(gs[1], sharex=ax1)  # 成交量
-    ax3 = fig.add_subplot(gs[2], sharex=ax1)  # RSI
-    ax4 = fig.add_subplot(gs[3], sharex=ax1)  # MACD
-
-    x = df['price_date'].astype(str).values
+    # GridSpec: 五層圖
+    gs = GridSpec(5, 1, height_ratios=[3, 1, 1, 1, 1], hspace=0.05)
+    ax_price = fig.add_subplot(gs[0])  # 價格圖
+    ax_amp = fig.add_subplot(gs[1], sharex=ax_price)  # 波動PVR
+    ax_vol = fig.add_subplot(gs[2], sharex=ax_price)  # 成交量
+    ax_rsi = fig.add_subplot(gs[3], sharex=ax_price)  # RSI
+    ax_macd = fig.add_subplot(gs[4], sharex=ax_price)  # MACD
 
     # 上方價格圖
-    sns.lineplot(x=x, y=df['price'], color='red', label='價格', linewidth=1, ax=ax1)
-    sns.lineplot(x=x, y=df['amp_pvr'], color='blue', label='波動PVR', linewidth=1, ax=ax1)
+    ax_price.plot(df.index, df['price'], color='red', label='價格', linewidth=1)
+    ax_price.set_ylabel('價格')
     for p in [5, 10, 15]:
-        sns.lineplot(x=x, y=(df[f'{p}_MA']), label=f'{p}日均價', ax=ax1, linestyle='dashed')
+        ax_price.plot(df.index, df[f'{p}_MA'], label=f'{p}日均價', linestyle='dashed')
 
     # 標記買賣訊號
     for idx, detail in df.iterrows():
         if df.at[idx, 'ind'] > 0:
-            ax1.scatter(idx, df['price'].min() * 0.99, marker='^', color='blue', s=80)
+            ax_price.scatter(idx, df['price'].min() * 0.99, marker='^', color='blue', s=80)
         elif df.at[idx, 'ind'] < 0:
-            ax1.scatter(idx, df['price'].min() * 0.99, marker='v', color='red', s=80)
+            ax_price.scatter(idx, df['price'].min() * 0.99, marker='v', color='red', s=80)
+
+    # 波動PVR圖
+    ax_amp.plot(df.index, df['amp_pvr'], color='blue', label='波動PVR', linewidth=1)
+    ax_amp.set_ylabel('波動PVR')
+    ax_amp.legend(fontsize=8, loc='upper left')
 
     # 成交量圖
-    ax2.bar(df.index, df['volume'], color='#ff00ff', alpha=0.6, width=0.8, label='成交量')
-    ax2.set_ylabel('成交量')
+    ax_vol.bar(df.index, df['volume'], color='#ff00ff', alpha=0.6, width=0.8, label='成交量')
+    ax_vol.set_ylabel('成交量')
+    ax_vol.legend(fontsize=8, loc='upper left')
 
     # RSI圖
-    ax3.plot(df.index, df['RSI'], color='purple', label='RSI')
-    ax3.axhline(70, color='red', linestyle='dashed', linewidth=0.7)
-    ax3.axhline(30, color='green', linestyle='dashed', linewidth=0.7)
-    ax3.set_ylabel('RSI')
+    ax_rsi.plot(df.index, df['RSI'], color='purple', label='RSI')
+    ax_rsi.axhline(70, color='red', linestyle='dashed', linewidth=0.7)
+    ax_rsi.axhline(30, color='green', linestyle='dashed', linewidth=0.7)
+    ax_rsi.set_ylabel('RSI')
+    ax_rsi.legend(fontsize=8, loc='upper left')
 
     # MACD圖
-    ax4.bar(df.index, df['MACD'].where(df['MACD'] > 0, 0), color='red', alpha=0.6, width=0.8)
-    ax4.bar(df.index, df['MACD'].where(df['MACD'] < 0, 0), color='blue', alpha=0.6, width=0.8)
-    ax4.set_ylabel('MACD')
-    ax4.set_xlabel('日期')
+    ax_macd.bar(df.index, df['MACD'].where(df['MACD'] > 0, 0), color='red', alpha=0.6, width=0.8)
+    ax_macd.bar(df.index, df['MACD'].where(df['MACD'] < 0, 0), color='blue', alpha=0.6, width=0.8)
+    ax_macd.set_ylabel('MACD')
+    ax_macd.set_xlabel('日期')
 
     # 隱藏上方子圖 x 標籤
-    ax1.xaxis.set_tick_params(labelbottom=False)
-    ax2.xaxis.set_tick_params(labelbottom=False)
-    ax3.xaxis.set_tick_params(labelbottom=False)
-    ax4.set_xticks(df.index)
-    ax4.set_xticklabels(df['price_date'].astype(str), rotation=90, fontsize=8)
+    ax_price.xaxis.set_tick_params(labelbottom=False)
+    ax_amp.xaxis.set_tick_params(labelbottom=False)
+    ax_vol.xaxis.set_tick_params(labelbottom=False)
+    ax_rsi.xaxis.set_tick_params(labelbottom=False)
+    ax_macd.set_xticks(df.index)
+    ax_macd.set_xticklabels(df['price_date'].astype(str), rotation=90, fontsize=8)
 
-    # 合併圖例
+    # 合併圖例到價格圖
     lines = []
     labels = []
-    for ax in [ax1, ax2, ax3, ax4]:
+    for ax in [ax_price, ax_amp, ax_vol, ax_rsi, ax_macd]:
         l, lab = ax.get_legend_handles_labels()
         lines += l
         labels += lab
-    ax1.legend(lines, labels, fontsize=8, loc='upper left')
+    ax_price.legend(lines, labels, fontsize=8, loc='upper left')
 
     # 滑鼠互動事件
     fig.canvas.mpl_connect(
         'motion_notify_event',
-        lambda event: on_mouse_move(event, df, ax1, ax2, ax3, ax4, stock_code, stock_name, df['est_price'].iloc[-1],
-                                    df['avg_price'].iloc[-1])
+        lambda event: on_mouse_move(event, df, ax_price, ax_vol, ax_rsi, ax_macd,
+                                    stock_code, stock_name,
+                                    df['est_price'].iloc[-1], df['avg_price'].iloc[-1])
     )
 
     # 手動調整間距
@@ -337,18 +327,19 @@ for master in codes:
     df['avg_price'] = df['price'].expanding().mean().round(decimal_place)
     df['avg_volume'] = df['volume'].expanding().mean().round(decimal_place)
     df['RSI'] = ta.rsi(df['price'], length=14)  # 指定window=14
-    # df['DIF'], df['DEA'], df['MACD'] = calculate_macd(df['price'])
+    # 計算MACD (含DIF/DEA)
     macd = ta.macd(df['price'])
-    df['DIF'], df['DEA'], df['MACD'] = macd['MACD_12_26_9'].fillna(0), macd['MACDs_12_26_9'].fillna(0), macd[
-                                                                                                            'MACDh_12_26_9'].fillna(
-        0) * 2
-    df = calculate_moving_averages(df)
+    df['DIF'] = macd['MACD_12_26_9'].fillna(0)
+    df['DEA'] = macd['MACDs_12_26_9'].fillna(0)
+    df['MACD'] = macd['MACDh_12_26_9'].fillna(0) * 2
+    # 計算均線
+    df = calc_ma(df)
     df['ind'] = 0
     df['result'] = ""
     # ===================== 判斷買賣時機 =====================
     for idx, row in df.iterrows():
         detect_row(row)
-    print(df.to_string())  # 輸出詳細
+    # print(df.to_string())  # 輸出詳細
     print(
         f"股票:{stock_code}, 指標價:{df['est_price'].iloc[-1]}, 均價:{df['avg_price'].iloc[-1]}, 當前股價:{df['price'].iloc[-1]}, MACD:{df['MACD'].iloc[-1]}")
 
