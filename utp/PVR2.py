@@ -4,17 +4,19 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 
 from utp import MySQL
+import pandas as pd
+import numpy as np
 
 """
 expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock('90')  # 股票列表
+codes = MySQL.get_stock('00', '6278')  # 股票列表
 sns.set(style="whitegrid")
 
 display_matplot = 1  # 是否顯示圖表
-rec_days = 7  # 最近幾日檢查
+rec_days = 3  # 最近幾日檢查
 rec_volume = 1000  # 最小成交量
 rec_stocks = []  # 記錄符合條件股票
 
@@ -30,10 +32,6 @@ def calculate_rsi_sma(prices, window=14):
 
 
 # ===================== 向量化計算 RSI [ Wilder's smoothing（平滑移动平均）]=====================
-import pandas as pd
-import numpy as np
-
-
 def calculate_rsi_wilder(df, column='price', period=14):
     delta = df[column].diff()
     gain = delta.clip(lower=0)
@@ -75,26 +73,6 @@ def calc_ma(df):
         df[f'{p}_V_MA'] = df['volume'].rolling(p).mean()
         df[f'{p}_E_MA'] = df['diff_pvr'].abs().rolling(p).mean()
     return df
-
-
-# ===================== 趨勢判斷 =====================
-def is_trend(seq):
-    n = len(seq)
-    total_increase = 0
-    total_decrease = 0
-    for i in range(1, n):
-        weight = i / (n * (n + 1) / 2) * 2
-        diff = seq[i] - seq[i - 1]
-        if diff > 0:
-            total_increase += diff * weight
-        else:
-            total_decrease += abs(diff) * weight
-    if total_increase > total_decrease:
-        return 1, "遞增趨勢"
-    elif total_increase < total_decrease:
-        return -1, "遞減趨勢"
-    else:
-        return 0, "沒有明顯趨勢"
 
 
 # 定义鼠标移动事件处理程序
@@ -183,7 +161,7 @@ def plot_stock(stock_code, stock_name, df, est_price, avg_price):
     ax_macd = fig.add_subplot(gs[4], sharex=ax_price)  # MACD
 
     # 上方價格圖
-    ax_price.plot(df.index, df['price'], color='red', label='價格', linewidth=1)
+    ax_price.plot(df.index, df['price'], color='red', label='價格', linewidth=2)
     ax_price.set_ylabel('價格')
     for p in [5, 10, 15]:
         ax_price.plot(df.index, df[f'{p}_MA'], label=f'{p}日均價', linestyle='dashed')
@@ -191,9 +169,9 @@ def plot_stock(stock_code, stock_name, df, est_price, avg_price):
     # 標記買賣訊號
     for idx, detail in df.iterrows():
         if df.at[idx, 'ind'] > 0:
-            ax_price.scatter(idx, df['price'].min() * 0.99, marker='^', color='blue', s=80)
+            ax_price.scatter(idx, df['price'].min() * 0.99, marker='^', color='red', s=80)
         elif df.at[idx, 'ind'] < 0:
-            ax_price.scatter(idx, df['price'].min() * 0.99, marker='v', color='red', s=80)
+            ax_price.scatter(idx, df['price'].min() * 0.99, marker='v', color='green', s=80)
 
     # 波動PVR圖
     ax_amp.plot(df.index, df['amp_pvr'], color='blue', label='波動PVR', linewidth=1)
@@ -248,43 +226,43 @@ def plot_stock(stock_code, stock_name, df, est_price, avg_price):
     plt.show()
 
 
-def detect_row(row):
+def detect_rule1(idx, row):
     volume_after_extra_prv = []
-    if abs(row['diff_pvr']) > abs(df.at[idx, '15_E_MA'] * 3.1):
+    if abs(row['diff_pvr']) > abs(row['15_E_MA'] * 3.1):
         # T:有能無量， T+1:有量則漲
-        if df.at[idx, 'MACD'] > 0:
-            if round(df.at[idx, 'MACD']) > 2 and df.at[idx, 'DIF'] < df.at[idx, 'DEA']:
+        if row['MACD'] > 0:
+            if round(row['MACD']) > 2 and row['DIF'] < row['DEA']:
                 df.at[idx, 'result'] = "* 0買入時機"
                 df.at[idx, 'ind'] = 1
                 volume_after_extra_prv = []
                 volume_after_extra_prv.append(row['volume'])
-            elif round(df.at[idx, 'MACD']) <= 2 and df.at[idx, '5_V_MA'] < (
+            elif round(row['MACD']) <= 2 and df.at[idx, '5_V_MA'] < (
                     df.at[idx, '10_V_MA'] * 1.5):  # 前期量減(偏差值0.2)
                 df.at[idx, 'result'] = "* 1買入時機"
                 df.at[idx, 'ind'] = 1
                 volume_after_extra_prv = []
                 volume_after_extra_prv.append(row['volume'])
-            elif df.at[idx, '5_V_MA'] < (df.at[idx, '15_V_MA']):  # 前期量減(偏差值0.2)
+            elif df.at[idx, '5_V_MA'] < (row['15_V_MA']):  # 前期量減(偏差值0.2)
                 df.at[idx, 'result'] = "* 2買入時機"
                 df.at[idx, 'ind'] = 1
                 volume_after_extra_prv = []
                 volume_after_extra_prv.append(row['volume'])
-            elif round(df.at[idx, 'MACD']) > 2 and df.at[idx, 'DIF'] > df.at[idx, 'DEA']:
+            elif round(row['MACD']) > 2 and row['DIF'] > row['DEA']:
                 df.at[idx, 'result'] = "* 11賣出時機(1.拉高出貨)"
                 df.at[idx, 'ind'] = -1
-            elif row['volume'] > (df.at[idx, '15_V_MA'] * 3):
+            elif row['volume'] > (row['15_V_MA'] * 3):
                 df.at[idx, 'result'] = "* 3賣出時機(1.拉高出貨)"
                 df.at[idx, 'ind'] = -1
         else:
-            if df.at[idx, '5_V_MA'] < (df.at[idx, '15_V_MA']):  # 前期量減(偏差值0.2)
+            if df.at[idx, '5_V_MA'] < (row['15_V_MA']):  # 前期量減(偏差值0.2)
                 df.at[idx, 'result'] = "* 2買入時機"
                 df.at[idx, 'ind'] = 1
                 volume_after_extra_prv = []
                 volume_after_extra_prv.append(row['volume'])
-            elif round(df.at[idx, 'MACD']) > 2 and df.at[idx, 'DIF'] > df.at[idx, 'DEA']:
+            elif round(row['MACD']) > 2 and row['DIF'] > row['DEA']:
                 df.at[idx, 'result'] = "* 3賣出時機(1.拉高出貨)"
                 df.at[idx, 'ind'] = -1
-            elif row['volume'] > (df.at[idx, '15_V_MA'] * 3):
+            elif row['volume'] > (row['15_V_MA'] * 3):
                 df.at[idx, 'result'] = "* 4賣出時機(1.拉高出貨)"
                 df.at[idx, 'ind'] = -1
         current_date = datetime.now()
@@ -297,13 +275,75 @@ def detect_row(row):
                     stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
                     if not stock_exists:
                         rec_stocks.append(
-                            {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume']})
+                            {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume'], 'price': row['price']})
     else:
         # 出現大能後, 記錄量
         volume_after_extra_prv.append(row['volume'])
         if row['volume'] <= (sum(volume_after_extra_prv) / len(volume_after_extra_prv)) * 0.5:
             # 量小於15均量, 則能量耗盡:看空
             df.at[idx, 'result'] = "* 賣出時機(2.拉高出貨)" + df.at[idx, 'result']
+            df.at[idx, 'ind'] = -1
+
+
+def detect_rule2(idx, row):
+    volume_after_extra_prv = []
+
+    # 先判斷是否出現大能
+    if abs(row['diff_pvr']) > abs(row['15_E_MA'] * 3.1):
+        # MACD > 0 判斷
+        if row['MACD'] > 0:
+            # 條件 1：MACD 高，DIF < DEA → 買入
+            if row['MACD'] > 2 and row['DIF'] < row['DEA']:
+                df.at[idx, 'result'] = "* 0買入時機"
+                df.at[idx, 'ind'] = 1
+                volume_after_extra_prv = [row['volume']]
+            # 條件 2：MACD 低，前期量減 → 買入
+            elif row['MACD'] <= 2 and df.at[idx, '5_V_MA'] < df.at[idx, '10_V_MA'] * 1.5:
+                df.at[idx, 'result'] = "* 1買入時機"
+                df.at[idx, 'ind'] = 1
+                volume_after_extra_prv = [row['volume']]
+            # 條件 3：前期量減 → 買入
+            elif df.at[idx, '5_V_MA'] < row['15_V_MA']:
+                df.at[idx, 'result'] = "* 2買入時機"
+                df.at[idx, 'ind'] = 1
+                volume_after_extra_prv = [row['volume']]
+            # 條件 4：MACD 高且 DIF > DEA → 賣出
+            elif row['MACD'] > 2 and row['DIF'] > row['DEA']:
+                df.at[idx, 'result'] = "* 11賣出時機(拉高出貨)"
+                df.at[idx, 'ind'] = -1
+            # 條件 5：量能大 → 賣出
+            elif row['volume'] > row['15_V_MA'] * 3:
+                df.at[idx, 'result'] = "* 3賣出時機(拉高出貨)"
+                df.at[idx, 'ind'] = -1
+        else:
+            # MACD <=0 的情況
+            if df.at[idx, '5_V_MA'] < row['15_V_MA']:
+                df.at[idx, 'result'] = "* 2買入時機"
+                df.at[idx, 'ind'] = 1
+                volume_after_extra_prv = [row['volume']]
+            elif row['MACD'] > 2 and row['DIF'] > row['DEA']:
+                df.at[idx, 'result'] = "* 3賣出時機(拉高出貨)"
+                df.at[idx, 'ind'] = -1
+            elif row['volume'] > row['15_V_MA'] * 3:
+                df.at[idx, 'result'] = "* 4賣出時機(拉高出貨)"
+                df.at[idx, 'ind'] = -1
+
+        # 推薦列表判斷
+        current_date = datetime.now()
+        date_difference = current_date - datetime.strptime(str(row['price_date']), '%Y-%m-%d')
+        if date_difference.days <= rec_days:
+            if row['avg_volume'] >= rec_volume:
+                if df.at[idx, 'ind'] == 1:
+                    df.at[idx, 'result'] = f"股票:{stock_code},{rec_days}日內存在買入時機"
+                    if not any(stock['stock_code'] == stock_code for stock in rec_stocks):
+                        rec_stocks.append({'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume'], 'price': row['price']})
+
+    else:
+        # 大能後累積量能
+        volume_after_extra_prv.append(row['volume'])
+        avg_vol = sum(volume_after_extra_prv) / len(volume_after_extra_prv)
+        if row['volume'] <= avg_vol * 0.5:
+            df.at[idx, 'result'] = "* 賣出時機(量能耗盡)" + df.at[idx, 'result']
             df.at[idx, 'ind'] = -1
 
 
@@ -328,6 +368,9 @@ for master in codes:
     df['avg_volume'] = df['volume'].expanding().mean().round(decimal_place)
     df['RSI'] = ta.rsi(df['price'], length=14)  # 指定window=14
     # 計算MACD (含DIF/DEA)
+    if len(df['price']) < 30:  # MACD慢線需要至少26個數值
+        print(f"股票:{stock_code} 價格資料太少，無法計算 MACD")
+        continue
     macd = ta.macd(df['price'])
     df['DIF'] = macd['MACD_12_26_9'].fillna(0)
     df['DEA'] = macd['MACDs_12_26_9'].fillna(0)
@@ -338,12 +381,13 @@ for master in codes:
     df['result'] = ""
     # ===================== 判斷買賣時機 =====================
     for idx, row in df.iterrows():
-        detect_row(row)
+        detect_rule2(idx, row)
     # print(df.to_string())  # 輸出詳細
-    print(
-        f"股票:{stock_code}, 指標價:{df['est_price'].iloc[-1]}, 均價:{df['avg_price'].iloc[-1]}, 當前股價:{df['price'].iloc[-1]}, MACD:{df['MACD'].iloc[-1]}")
+    # print( f"股票:{stock_code}, 指標價:{df['est_price'].iloc[-1]}, 均價:{df['avg_price'].iloc[-1]}, 當前股價:{df['price'].iloc[-1]}, MACD:{df['MACD'].iloc[-1]}")
 
     if display_matplot:
         plot_stock(stock_code, stock_name, df, df['est_price'].iloc[-1], df['avg_price'].iloc[-1])
 
-print("指標股票:", rec_stocks)
+print("指標股票")
+for stock_code in rec_stocks:
+    print(f"{stock_code}")
