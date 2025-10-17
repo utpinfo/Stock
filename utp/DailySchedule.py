@@ -10,7 +10,6 @@ threads = 300
 def get_daily_schedule(stock_code, isin_code):
     DailySchedule(stock_code, isin_code)
 
-
 # 獲取股票代碼
 # codes = MySQL.get_stock('00','3042')
 codes = MySQL.get_stock(None)
