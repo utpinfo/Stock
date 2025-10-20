@@ -10,7 +10,7 @@ from utp import MySQL
 
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock('90')  # 1513, 2301, 1513,6285,4974
+codes = MySQL.get_stock('90',3324)  # 1513, 2301, 1513,6285,4974
 # codes = MySQL.get_stock('10')
 sns.set(style="whitegrid")  # 设置Seaborn默认样式
 
@@ -48,7 +48,7 @@ def is_trend(seq):
 # 大於70(過熱) 小於30(過冷)
 # (公式: 上升幅度的合計 / 上升幅度的合計 + 下跌幅度的合計)
 def calculate_rsi(data, window=14):
-    delta = data['price'].diff()
+    delta = data['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
     rs = gain / loss
@@ -78,7 +78,7 @@ def plot_stock(stock_code, stock_name, df):
     plt.xlabel('日期')
     plt.ylabel('價格')
     plt.xlim(len(df) - 60, len(df))
-    max_price = df['price'].max() + 10
+    max_price = df['close'].max() + 10
     plt.ylim(-50, max_price + 50)  # 设置 y 轴的范围，限制最高和最低值
 
     plt.subplots_adjust(top=0.9)  # 调整顶部边界框位置
@@ -110,8 +110,8 @@ def plot_stock(stock_code, stock_name, df):
     sns.lineplot(x=x, y=amp_pvr, color='red', label='波動PVR')
     volume = (df['volume'] / ratio2).values  # ratio2
     sns.lineplot(x=x, y=volume, color='#ff00ff', label='數量')
-    price = df['price'].values
-    sns.lineplot(x=x, y=price, color='green', label='價格', linewidth=1)
+    close = df['close'].values
+    sns.lineplot(x=x, y=close, color='green', label='價格', linewidth=1)
     p_5_ma = df['5_MA'].values
     p_10_ma = df['10_MA'].values
     p_15_ma = df['15_MA'].values
@@ -133,8 +133,8 @@ def plot_stock(stock_code, stock_name, df):
 
     df['date'] = pd.to_datetime(df['price_date'])
     df['date'] = df['date'].apply(lambda x: x.strftime('%Y-%m-%d'))
-    ema1 = df["price"].ewm(span=12, adjust=False).mean() * 5  # 放大10倍顯示
-    ema2 = df["price"].ewm(span=26, adjust=False).mean() * 5  # 放大10倍顯示
+    ema1 = df["close"].ewm(span=12, adjust=False).mean() * 5  # 放大10倍顯示
+    ema2 = df["close"].ewm(span=26, adjust=False).mean() * 5  # 放大10倍顯示
     DIF = (ema1 - ema2)  # 短期長期差
     DEA = DIF.ewm(span=9, adjust=False).mean()  # 9日移動平均
     macd_point = 2 * (DIF - DEA)
@@ -176,21 +176,21 @@ def on_mouse_move(event, data):
     if idx >= 0 and idx < len(data):
         cur_date = data.at[idx, 'price_date']
         diff_pvr = data.at[idx, 'diff_pvr']
-        cur_price = data.at[idx, 'price']
+        cur_price = data.at[idx, 'close']
         cur_volume = data.at[idx, 'volume']
         # 绘制新的指示线
         ax.axhline(y=event.ydata, color='gray', linestyle='--')
         ax.axvline(x=event.xdata, color='gray', linestyle='--')
         # 上方壓力計算
         press_top_price = 0
-        press_top_data = df[(df['ind'] != 0) & (df['price'] > cur_price) & (df['price_date'] < cur_date)]
+        press_top_data = df[(df['ind'] != 0) & (df['close'] > cur_price) & (df['price_date'] < cur_date)]
         if len(press_top_data) > 0:
-            press_top_price = press_top_data.iloc[-1]['price']
+            press_top_price = press_top_data.iloc[-1]['close']
 
-        press_low_data = df[(df['ind'] != 0) & (df['price'] < cur_price) & (df['price_date'] < cur_date)]
+        press_low_data = df[(df['ind'] != 0) & (df['close'] < cur_price) & (df['price_date'] < cur_date)]
         press_low_price = 0
         if len(press_low_data) > 0:
-            press_low_price = press_low_data.iloc[-1]['price']
+            press_low_price = press_low_data.iloc[-1]['close']
 
         msg = f'日期: {cur_date}\nPVR:{diff_pvr}, 價格:{cur_price}, 數量:{cur_volume}\n(壓力:{press_top_price} 支撐:{press_low_price})'
         plt.text(0.95, 0.95, msg, horizontalalignment='right', verticalalignment='top', transform=plt.gca().transAxes,
@@ -223,7 +223,7 @@ for idx, master in enumerate(codes):
     for idx, detail in df.iterrows():
         tol_cnt = tol_cnt + 1
         cur_date = str(df.at[idx, 'price_date'])
-        cur_price = float(df.at[idx, 'price'])
+        cur_price = float(df.at[idx, 'close'])
         cur_volume = df.at[idx, 'volume']
         tol_price = tol_price + cur_price
         tol_volume = tol_volume + cur_volume
@@ -232,7 +232,7 @@ for idx, master in enumerate(codes):
 
         # 取得T-1數據
         if idx > 0:
-            pre_price = float(df.at[idx - 1, 'price'])
+            pre_price = float(df.at[idx - 1, 'close'])
             pre_volume = df.at[idx - 1, 'volume']
             pre_avg_pvr = df.at[idx - 1, 'avg_pvr']
         else:
@@ -272,9 +272,9 @@ for idx, master in enumerate(codes):
         df.at[idx, 'DIF'] = 0
         df.at[idx, 'DEA'] = 0
 
-        df.at[idx, '5_MA'] = round(df['price'].iloc[idx - 4:idx + 1].mean(), decimal_place)  # 计算五日均线(含T日)
-        df.at[idx, '10_MA'] = round(df['price'].iloc[idx - 9:idx + 1].mean(), decimal_place)  # 计算十日均线(含T日)
-        df.at[idx, '15_MA'] = round(df['price'].iloc[idx - 14:idx + 1].mean(), decimal_place)  # 计算十五日均线(含T日)
+        df.at[idx, '5_MA'] = round(df['close'].iloc[idx - 4:idx + 1].mean(), decimal_place)  # 计算五日均线(含T日)
+        df.at[idx, '10_MA'] = round(df['close'].iloc[idx - 9:idx + 1].mean(), decimal_place)  # 计算十日均线(含T日)
+        df.at[idx, '15_MA'] = round(df['close'].iloc[idx - 14:idx + 1].mean(), decimal_place)  # 计算十五日均线(含T日)
         df.at[idx, '5_V_MA'] = round(df['volume'].iloc[idx - 4:idx + 1].mean(), decimal_place)  # 计算五日均线(含T日)
         df.at[idx, '10_V_MA'] = round(df['volume'].iloc[idx - 9:idx + 1].mean(), decimal_place)  # 计算十日均线(含T日)
         df.at[idx, '15_V_MA'] = round(df['volume'].iloc[idx - 14:idx + 1].mean(), decimal_place)  # 计算十五日均线(含T日)
@@ -290,8 +290,8 @@ for idx, master in enumerate(codes):
         # RSI
 
         # begin (MACD計算)
-        ema1 = df["price"].ewm(span=12, adjust=False).mean() * 5  # 放大10倍顯示
-        ema2 = df["price"].ewm(span=26, adjust=False).mean() * 5  # 放大10倍顯示
+        ema1 = df["close"].ewm(span=12, adjust=False).mean() * 5  # 放大10倍顯示
+        ema2 = df["close"].ewm(span=26, adjust=False).mean() * 5  # 放大10倍顯示
         DIF = (ema1 - ema2)  # 短期長期差
         DEA = DIF.ewm(span=9, adjust=False).mean()  # 9日移動平均
         MACD = 2 * (DIF - DEA)

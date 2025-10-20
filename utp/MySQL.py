@@ -35,7 +35,7 @@ def add_stock(stock_code, stock_name, stock_kind, isin_code):
             (stock_code, stock_name, stock_kind, isin_code, stock_status)
         values (%s, %s, %s, %s, '10')
             on duplicate key update stock_name = values(stock_name), stock_kind = values(stock_kind), isin_code = values(isin_code), stock_status = values(stock_status)
-    	"""
+        """
     params = (stock_code, stock_name, stock_kind, isin_code)
     helper.execute_insert_update(sql, params)
     helper.close()
@@ -45,7 +45,7 @@ def get_price(stock_code, limit, sort='asc', b_price_date=None, e_price_date=Non
     helper = MySQLHelper(host='127.0.0.1', user='root', password='', database='stock')
     helper.connect()
     sql = """
-        SELECT stock_code, price_date, price, volume
+        SELECT stock_code, price_date, close, volume
         FROM (
             SELECT *
             FROM price
@@ -75,16 +75,16 @@ def get_price(stock_code, limit, sort='asc', b_price_date=None, e_price_date=Non
     return data
 
 
-def add_price(stock_code, price_date, price, volume=None):
+def add_price(stock_code, price_date, open, close, high, low, volume=None):
     helper = MySQLHelper(host='127.0.0.1', user='root', password='', database='stock')
     helper.connect()
     sql = """
     insert into price
-        (stock_code, price_date, price,volume)
-    values (%s, %s, %s, %s)
-        on duplicate key update price = values (price), volume = values(volume)
-	"""
-    params = (stock_code, price_date, price, volume)
+        (stock_code, price_date, open, close, high, low, volume)
+    values (%s, %s, %s, %s, %s, %s, %s)
+        on duplicate key update close = values (close), volume = values(volume)
+    """
+    params = (stock_code, price_date, open, close, high, low, volume)
     helper.execute_insert_update(sql, params)
     # if helper.execute_insert_update(sql, params):
     #    print("Data inserted successfully")
@@ -108,7 +108,7 @@ def add_revenue(stock_code, revenue_date, revenue):
         (stock_code, revenue_date, revenue)
     values (%s, %s, %s)
         on duplicate key update revenue = values (revenue)
-	"""
+    """
     params = (stock_code, revenue_date, revenue)
     helper.execute_insert_update(sql, params)
     # if helper.execute_insert_update(sql, params):
@@ -133,7 +133,7 @@ def add_eps(stock_code, eps_date, eps):
         (stock_code, eps_date, eps)
     values (%s, %s, %s)
         on duplicate key update eps = values (eps)
-	"""
+    """
     params = (stock_code, eps_date, eps)
     helper.execute_insert_update(sql, params)
     # if helper.execute_insert_update(sql, params):
