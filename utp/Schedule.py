@@ -29,6 +29,7 @@ def DailySchedule(stock_kind, stock_code, isin_code,
         stock_code_yf = stock_code + '.TW'
 
     rows = yf.Ticker(stock_code_yf).history(start=start_date, end=end_date)
+    rows[['Close', 'Open', 'High', 'Low']] = rows[['Close', 'Open', 'High', 'Low']].fillna(0)
     for date, row in rows.iterrows():
         price_date = str(date.date())
         # print(f"日期: {price_date}, 收盤價: {round(row['Close'], 2)}, 成交量: {row['Volume']}")

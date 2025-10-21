@@ -1,4 +1,5 @@
-from utp import MySQL
+import math
 
-data = MySQL.get_price(1516, None, 'asc','2025-10-16','2025-10-17')
-print(data)
+from utp import MySQL
+a = 'nan'
+print( math.copysign(1, -12.1) )
