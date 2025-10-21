@@ -168,7 +168,7 @@ def calc_ma(df):
 
 
 # 定义鼠标移动事件处理程序
-def on_mouse_move_auto(event, df, axes, stock_code, stock_name, est_price=None, avg_price=None):
+def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
     """滑鼠移動事件：在所有子圖同步顯示指示線，橫線對應各軸資料"""
     if event.inaxes is None or event.xdata is None:
         return
@@ -188,6 +188,7 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name, est_price=None, 
         axes.get('OBV'): cur.get('OBV', 0),
         axes.get('amp_pvr'): cur.get('amp_pvr', 0),
         axes.get('MACD'): cur.get('MACD', 0),
+        axes.get('KDJ'): cur.get('KDJ', 0),
     }
 
     for ax, yv in y_values.items():
@@ -239,9 +240,11 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name, est_price=None, 
     if axes.get('close'):
         ax = axes['close']
         ax.set_title(
-            f"{stock_name}({stock_code}) | 指標價:{cur.get('est_price', 0)} 均價:{cur.get('avg_price', 0)} "
-            f"價:{cur.get('close', 0)} 量:{cur.get('volume', 0)} "
-            f"(壓:{press_top_price} 支:{press_low_price})"
+            f"{stock_name}({stock_code})\n"
+            f"指標價:{cur.get('est_price', 0)} 均價:{cur.get('avg_price', 0)}\n"
+            f"價:{cur.get('close', 0)} 量:{cur.get('volume', 0)}\n"
+            f"(壓:{press_top_price} 支:{press_low_price})\n"
+            f"({cur.get('REASON', 0)})"
         )
 
     event.canvas.draw_idle()
@@ -288,11 +291,13 @@ def plot_stock(stock_code, stock_name, df):
                         ax.plot(df.index, df[ma_col], label=f'{ma}日均線', linestyle='dashed')
                 # 繪製買賣訊號
                 for idx, row in df.iterrows():
-                    if 'TRAND' in df.columns:
-                        if row['TRAND'] > 0:
+                    if 'SCORE' in df.columns:
+                        if row['SCORE'] > 0:
                             ax.scatter(idx, df['close'].min() * 0.99, marker='^', color='red', s=80)
-                        elif row['TRAND'] < 0:
+                        elif row['SCORE'] < 0:
                             ax.scatter(idx, df['close'].min() * 0.99, marker='v', color='green', s=80)
+                        elif row['SCORE'] == 0:
+                            ax.scatter(idx, df['close'].min() * 0.99, marker='*', color='orange', s=80)
             elif p == 'RSI':
                 ax.axhline(70, color='red', linestyle='dashed', linewidth=0.7)
                 ax.axhline(30, color='green', linestyle='dashed', linewidth=0.7)
@@ -327,7 +332,7 @@ def plot_stock(stock_code, stock_name, df):
     axes[panels[-1]].set_xticks(df.index)
     axes[panels[-1]].set_xticklabels(df['price_date'].astype(str), rotation=90, fontsize=8)
     # 2️⃣ 調整子圖間距
-    plt.subplots_adjust(top=0.95, bottom=0.15, left=0.07, right=0.95)
+    plt.subplots_adjust(top=0.9, bottom=0.15, left=0.07, right=0.95)
     # 3️⃣ 綁定滑鼠事件（這裡必須用 axes 字典）
     fig.canvas.mpl_connect(
         'motion_notify_event',
@@ -341,6 +346,7 @@ def plot_stock(stock_code, stock_name, df):
 
 def detect_rule2(idx, row):
     volume_after_extra_prv = []
+    J = row['KDJ'][2]  # KDJ的J指標
     if (row['volume'] < (row['5_V_MA'])) and (row['close'] < row['5_MA']) and (row['MACD'] > 0) and (row['RSI'] < 70):
         print(row['price_date'], '放量且價格同上')
 
@@ -349,15 +355,22 @@ def detect_rule2(idx, row):
             return
         # T:有能無量， T+1:有量則漲
         if row['RSI'] > 30:
-            if (row['5_V_MA'] < (row['15_V_MA'])) and (row['close'] < row['10_MA']):  # 量縮且價格單價10日均下
-                df.at[idx, 'REASON'] = "* 進貨訊號(量縮且價格單價10日均下))"
-                df.at[idx, 'TRAND'] = 1
-            elif (row['5_V_MA'] < row['15_V_MA'] and row['RSI'] >= 60):
-                df.at[idx, 'REASON'] = "* 出貨訊號(量縮且RSI高於60)"
+            if (row['5_V_MA'] < row['15_V_MA']) and (row['close'] < row['10_MA']):
+                if row['amp_pvr'] < 0:
+                    df.at[idx, 'REASON'] = f"* 出貨訊號(量縮且價格低於10日均, PVR:{row['amp_pvr']})"
+                    df.at[idx, 'TRAND'] = -1
+                elif J is not None and J < 80:
+                    df.at[idx, 'REASON'] = f"* 進貨訊號(量縮且價格低於10日均, KDJ:{J})"
+                    df.at[idx, 'TRAND'] = 1
+                else:
+                    df.at[idx, 'REASON'] = f"* 出貨訊號(量縮且價格低於10日均, KDJ過高)"
+                    df.at[idx, 'TRAND'] = -1
+            elif row['5_V_MA'] < row['15_V_MA'] and row['RSI'] >= 60:
+                df.at[idx, 'REASON'] = f"* 出貨訊號(量縮且RSI高於60, KDJ:{J})"
                 df.at[idx, 'TRAND'] = -1
             else:
-                df.at[idx, 'REASON'] = "* 出貨訊號2"
-                df.at[idx, 'TRAND'] = -1
+                df.at[idx, 'REASON'] = "* 觀察中"
+                df.at[idx, 'TRAND'] = 0
         elif row['RSI'] < 30:
             df.at[idx, 'REASON'] = "* 進貨訊號3"
             df.at[idx, 'TRAND'] = 1
@@ -388,6 +401,100 @@ def detect_rule2(idx, row):
             df.at[idx, 'TRAND'] = -1
 
 
+def detect_rule3(idx, row):
+    """
+    改進版單筆資料買賣訊號判斷
+    考慮底部吸籌、MACD趨勢、PVR、RSI、KDJ、均線與成交量
+    輸入:
+        row: pd.Series，包含 close, volume, 5_MA, 10_MA, 15_V_MA, 5_V_MA, RSI, MACD, DIF, DEA, amp_pvr, J (KDJ的J)
+    輸出:
+        df.at[idx, 'TRAND'], df.at[idx, 'REASON'], df.at[idx, 'SCORE']
+    """
+    score = 0
+    reasons = []
+
+    # RSI
+    if row['RSI'] < 30:
+        score += 1
+        reasons.append('RSI低 (<30)')
+    elif row['RSI'] > 70:
+        score -= 1
+        reasons.append('RSI高 (>70)')
+
+    # KDJ J
+    J = row.get('J', 50)
+    if J < 20:
+        score += 1
+        reasons.append(f'KDJ超賣 (J={J:.1f})')
+    elif J > 80:
+        score -= 1
+        reasons.append(f'KDJ超買 (J={J:.1f})')
+
+    # 均線
+    if row['close'] > row['10_MA']:
+        score += 0.5
+        reasons.append('價格高於10日均線')
+    else:
+        # 若底部條件成立，不扣分
+        if row['RSI'] < 30 and J < 20:
+            score += 0
+            reasons.append('價格低於10日均線 (底部)')
+        else:
+            score -= 0.5
+            reasons.append('價格低於10日均線')
+
+    # 成交量
+    if row['5_V_MA'] > row['15_V_MA']:
+        score += 0.5
+        reasons.append('短期量大於長期量')
+    else:
+        # 底部量縮不扣分
+        if row['RSI'] < 30 and J < 20:
+            score += 0
+            reasons.append('短期量小於長期量 (底部吸籌)')
+        else:
+            score -= 0.5
+            reasons.append('短期量小於長期量')
+
+    # PVR
+    if row['amp_pvr'] > 0:
+        score += 0.5
+        reasons.append('放量異常')
+    else:
+        # 底部量縮不扣分
+        if row['RSI'] < 30 and J < 20:
+            score += 0.2
+            reasons.append('PVR負值但底部量縮')
+        else:
+            score -= 0.5
+            reasons.append('無量或縮量')
+
+    # MACD + DIF/DEA 趨勢
+    if row['MACD'] > 0 or row['DIF'] > row['DEA']:
+        score += 0.5
+        reasons.append('MACD多頭或DIF上彎')
+    else:
+        score -= 0.5
+        reasons.append('MACD空頭或DIF下彎')
+
+    # 決定方向
+    if score >= 1:
+        trand = 1
+        reason = "* 進貨訊號 | " + ", ".join(reasons)
+    elif score <= -1:
+        trand = -1
+        reason = "* 出貨訊號 | " + ", ".join(reasons)
+    else:
+        trand = 0
+        reason = "* 無明確訊號 | " + ", ".join(reasons)
+
+    # 可加 PVR 過濾
+    if abs(row['diff_pvr']) > abs(row['avg_pvr'] * 2):
+        df.at[idx, 'TRAND'] = trand
+        df.at[idx, 'SCORE'] = score
+        df.at[idx, 'REASON'] = reason
+
+
 # ===================== 主流程 =====================
 for master in codes:
     stock_code = master['stock_code']
@@ -416,7 +523,7 @@ for master in codes:
     # 計算 KDJ
     kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
     df['KDJ'] = list(zip(kd['STOCHk_9_3_3'], kd['STOCHd_9_3_3'], 3 * kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']))
-
+    df['J'] = kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']
     # 計算MACD (含DIF/DEA)
     if len(df['close']) < 30:  # MACD慢線需要至少26個數值
         print(f"股票:{stock_code} 價格資料太少，無法計算 MACD")
@@ -453,7 +560,7 @@ for master in codes:
     df['REASON'] = ""
     # ===================== 判斷買賣時機 =====================
     for idx, row in df.iterrows():
-        detect_rule2(idx, row)
+        detect_rule3(idx, row)
 
     print(df.to_string())  # 輸出詳細
     # print( f"股票:{stock_code}, 指標價:{df['est_price'].iloc[-1]}, 均價:{df['avg_price'].iloc[-1]}, 當前股價:{df['close'].iloc[-1]}, MACD:{df['MACD'].iloc[-1]}")

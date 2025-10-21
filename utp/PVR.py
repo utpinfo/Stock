@@ -10,7 +10,7 @@ from utp import MySQL
 
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock('90',3324)  # 1513, 2301, 1513,6285,4974
+codes = MySQL.get_stock('90',6257)  # 1513, 2301, 1513,6285,4974
 # codes = MySQL.get_stock('10')
 sns.set(style="whitegrid")  # 设置Seaborn默认样式
 
