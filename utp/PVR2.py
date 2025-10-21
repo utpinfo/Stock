@@ -238,14 +238,14 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
     # 更新標題
     if axes.get('close'):
         ax = axes['close']
-        title = f"{stock_name}({stock_code})"
-        title += f"\n指標價:{cur.get('est_price')} 均價:{cur.get('avg_price')}"
-        title += f"\n價:{cur.get('close')} 量:{cur.get('volume')}"
-        title += f"\n(壓:{press_top_price} 支:{press_low_price})"
+        msg = f"{stock_name}({stock_code})"
+        msg += f"\n指標價:{cur.get('est_price')} 均價:{cur.get('avg_price')}"
+        msg += f"\n價:{cur.get('close')} 量:{cur.get('volume')}"
+        msg += f"\n(壓:{press_top_price} 支:{press_low_price})"
         if not pd.isna(cur.get('REASON')):
-            title += f"\n{cur.get('REASON')}"
+            msg += f"\n{cur.get('REASON')}"
 
-        ax.set_title(title)
+        ax.set_title(msg)
 
     event.canvas.draw_idle()
 
