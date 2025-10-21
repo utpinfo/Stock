@@ -1,12 +1,10 @@
+from utp import MySQL
 from datetime import datetime
 import pandas_ta as ta
 import seaborn as sns
-from matplotlib import pyplot as plt
-
-from utp import MySQL
 import pandas as pd
 import numpy as np
-
+from tabulate import tabulate
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
@@ -20,9 +18,10 @@ expanding: 行累積合計(階段合計)
 decimal_place = 2
 analyse_days = 90
 codes = MySQL.get_stock(stock_status=None, stock_code='2464')  # 股票列表
-sns.set(style="whitegrid")
+sns.set_theme(style="whitegrid")
 
 display_matplot = 1  # 是否顯示圖表
+display_df = 1  # 是否顯示詳細數據
 rec_days = 3  # 最近幾日檢查
 rec_volume = 1000  # 最小成交量
 rec_stocks = []  # 記錄符合條件股票
@@ -239,13 +238,14 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
     # 更新標題
     if axes.get('close'):
         ax = axes['close']
-        ax.set_title(
-            f"{stock_name}({stock_code})\n"
-            f"指標價:{cur.get('est_price', 0)} 均價:{cur.get('avg_price', 0)}\n"
-            f"價:{cur.get('close', 0)} 量:{cur.get('volume', 0)}\n"
-            f"(壓:{press_top_price} 支:{press_low_price})\n"
-            f"({cur.get('REASON', 0)})"
-        )
+        title = f"{stock_name}({stock_code})"
+        title += f"\n指標價:{cur.get('est_price')} 均價:{cur.get('avg_price')}"
+        title += f"\n價:{cur.get('close')} 量:{cur.get('volume')}"
+        title += f"\n(壓:{press_top_price} 支:{press_low_price})"
+        if not pd.isna(cur.get('REASON')):
+            title += f"\n{cur.get('REASON')}"
+
+        ax.set_title(title)
 
     event.canvas.draw_idle()
 
@@ -333,6 +333,8 @@ def plot_stock(stock_code, stock_name, df):
     axes[panels[-1]].set_xticklabels(df['price_date'].astype(str), rotation=90, fontsize=8)
     # 2️⃣ 調整子圖間距
     plt.subplots_adjust(top=0.9, bottom=0.15, left=0.07, right=0.95)
+    # 只顯示有效分析的日期 (分析天數 - MACD的30天)
+    axes[panels[-1]].set_xlim(df.index[-(analyse_days - 30)], df.index[-1])
     # 3️⃣ 綁定滑鼠事件（這裡必須用 axes 字典）
     fig.canvas.mpl_connect(
         'motion_notify_event',
@@ -385,13 +387,12 @@ def detect_rule2(idx, row):
         # 计算日期差
         date_difference = current_date - datetime.strptime(str(row['price_date']), '%Y-%m-%d')
         if date_difference.days <= rec_days:
-            if row['avg_volume'] >= rec_volume:
-                if df.at[idx, 'TRAND'] == 1:
-                    df.at[idx, 'REASON'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
-                    stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
-                    if not stock_exists:
-                        rec_stocks.append(
-                            {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume']})
+            if df.at[idx, 'TRAND'] == 1:
+                df.at[idx, 'REASON'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
+                stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
+                if not stock_exists:
+                    rec_stocks.append(
+                        {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume']})
     else:
         # 出現大能後, 記錄量
         volume_after_extra_prv.append(row['volume'])
@@ -493,6 +494,16 @@ def detect_rule3(idx, row):
         df.at[idx, 'TRAND'] = trand
         df.at[idx, 'SCORE'] = score
         df.at[idx, 'REASON'] = reason
+    # 優選清單
+    current_date = datetime.now()
+    date_difference = current_date - datetime.strptime(str(row['price_date']), '%Y-%m-%d')
+    if date_difference.days <= rec_days:
+        if df.at[idx, 'TRAND'] == 1:
+            df.at[idx, 'REASON'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
+            stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
+            if not stock_exists:
+                rec_stocks.append(
+                    {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume']})
 
 
 # ===================== 主流程 =====================
@@ -556,19 +567,16 @@ for master in codes:
 
     # 計算均線
     df = calc_ma(df)
-    df['TRAND'] = 0
-    df['REASON'] = ""
     # ===================== 判斷買賣時機 =====================
     for idx, row in df.iterrows():
         detect_rule3(idx, row)
 
-    print(df.to_string())  # 輸出詳細
-    # print( f"股票:{stock_code}, 指標價:{df['est_price'].iloc[-1]}, 均價:{df['avg_price'].iloc[-1]}, 當前股價:{df['close'].iloc[-1]}, MACD:{df['MACD'].iloc[-1]}")
-
+    if display_df:
+        # pd.options.display.colheader_justify = 'left'
+        print(tabulate(df, headers='keys', tablefmt='plain', stralign='left', numalign='left'))
     if display_matplot:
         # plot_stock(stock_code, stock_name, df, df['est_price'].iloc[-1], df['avg_price'].iloc[-1])
         plot_stock(stock_code, stock_name, df)
-
 print("指標股票")
 for stock_code in rec_stocks:
     print(f"{stock_code}")
