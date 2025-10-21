@@ -17,10 +17,10 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock(stock_status=None, stock_code='4974')  # 股票列表
+codes = MySQL.get_stock(stock_status=None, stock_code='6257')  # 股票列表
 sns.set_theme(style="whitegrid")
 display_matplot = 1  # 是否顯示圖表
-display_df = 1  # 是否顯示詳細數據
+display_df = 2  # 是否顯示詳細數據 (0.不顯示 1.全部顯示 2.只顯示趨勢)
 rec_days = 3  # 最近幾日檢查
 rec_volume = 1000  # 最小成交量
 rec_stocks = []  # 記錄符合條件股票
@@ -350,114 +350,119 @@ def plot_stock(stock_code, stock_name, df):
 
 def detect_rule3(idx, row, df):
     """
-    detect_rule3_v7 - 強化版買賣訊號判斷
-    - 高位放量/超買偏空
-    - 低位縮量/超賣偏多
-    - 多因子量化得分，最終範圍 -100 ~ +100
-    - 區分正觀望 (trand=0.5) / 負觀望 (trand=-0.5)
+    detect_rule3_v10 - 支援無量下跌判斷
+    - 高位放量/超買 → 偏空
+    - 低位縮量/超賣 → 偏多
+    - 無量下跌 → 底部偏多加分
+    - RSI / KDJ / MACD 使用趨勢化比例分數
+    - 動態觀望閾值
+    - 正觀望 trand=0.5 / 負觀望 trand=-0.5
     """
 
     score = 0.0
     reasons = []
 
-    # 權重設定（可回測調整）
+    # 1. 權重設定
     weights = {
         'RSI': 1.4,
-        'KDJ': 1.2,
+        'KDJ': 1.0,
         'MA': 1.0,
         'VOL': 0.6,
         'PVR': 0.8,
         'MACD': 1.0,
     }
 
+    # 2. 底部 / 高位加權
+    bottom_boost = 5  # 底部偏多加分
+    top_penalty = 5  # 高位偏空扣分
+
     # 核心指標
     rsi = row['RSI']
-    J = max(0, min(100, row.get('J', 50)))  # 修正 KDJ J 範圍
+    K, D, J = row['KDJ']
     pvr = row['amp_pvr']
+    macd_strength = row['DIF'] - row['DEA']
+    diff_price = row['diff_price']
 
-    # 自動判斷情境
+    prev_rsi = row.get('prev_RSI', rsi)
+    prev_J = row.get('prev_J', J)
+
+    # 判斷底部 / 高位
     is_bottom = (rsi < 40 and J < 40 and pvr < 0)
     is_top = (rsi > 60 and J > 70 and pvr > 2)
 
-    # === RSI ===
-    if rsi < 30:
-        rsi_score = +1
-    elif rsi < 40:
-        rsi_score = +0.6
-    elif rsi > 80:
-        rsi_score = -1
-    elif rsi > 70:
-        rsi_score = -0.7
-    elif rsi > 60:
-        rsi_score = -0.5
-    else:
-        rsi_score = (50 - rsi) / 50
+    # 計算量比
+    vol_ratio = 1
+    if '15_V_MA' in row and row['15_V_MA'] != 0:
+        vol_ratio = row['5_V_MA'] / row['15_V_MA']
+
+    # === RSI 趨勢化分數 ===
+    rsi_trend = prev_rsi - rsi
+    rsi_score = np.clip(rsi_trend / 50, -1, 1)
+    if is_bottom:
+        rsi_score += bottom_boost
+    elif is_top:
+        rsi_score -= top_penalty
+    rsi_score = np.clip(rsi_score, -1, 1)
     score += rsi_score * weights['RSI']
-    reasons.append(f"RSI={rsi:.1f} → {rsi_score:+.2f}")
+    reasons.append(f"RSI={rsi:.1f} (前{prev_rsi:.1f}) → {rsi_score:+.2f}")
 
-    # === KDJ ===
-    K, D, J = row['KDJ']
-    prev_kdj = row['prev_KDJ']
-    if pd.isna(prev_kdj):
-        prev_K, prev_D, prev_J = row['KDJ']  # 第一筆，用當前代替
-    else:
-        prev_K, prev_D, prev_J = prev_kdj
-
-    # 趨勢判斷（只看上升或下降）
-    kdj_trend = 0
-    if J > prev_J:  # J 上升 → 多方
-        kdj_trend = +1
-    elif J < prev_J:  # J 下降 → 空方
-        kdj_trend = -1
-    else:  # 無明顯變化
-        kdj_trend = 0
-
-    # 轉換到權重
-    kdj_score = np.clip(kdj_trend, -1, 1)
+    # === KDJ 趨勢化分數 ===
+    kdj_diff = J - prev_J
+    kdj_score = np.clip(kdj_diff / 50, -1, 1)
+    if is_bottom:
+        kdj_score += bottom_boost
+    elif is_top:
+        kdj_score -= top_penalty
+    kdj_score = np.clip(kdj_score, -1, 1)
     score += kdj_score * weights['KDJ']
-    reasons.append(f"KDJ趨勢 J={J:.1f} (前J={prev_J:.1f}) → {kdj_score:+.2f}")
+    reasons.append(f"KDJ趨勢 J={J:.1f} (前{prev_J:.1f}) → {kdj_score:+.2f}")
 
     # === 均線乖離 ===
     if '10_MA' in row and row['10_MA'] != 0:
         ma_diff = (row['close'] - row['10_MA']) / row['10_MA']
         ma_score = np.clip(ma_diff * 4, -1, 1)
         if is_top and ma_diff > 0:
-            ma_score *= -0.5  # 高位乖離反扣分
+            ma_score *= -0.5
+        if is_bottom and ma_diff < 0:
+            ma_score *= 0.5
         score += ma_score * weights['MA']
         reasons.append(f"均線乖離={ma_diff * 100:.1f}% → {ma_score:+.2f}")
 
-    # === 成交量動能 ===
-    if '15_V_MA' in row and row['15_V_MA'] != 0:
-        vol_ratio = row['5_V_MA'] / row['15_V_MA']
-        if is_bottom and vol_ratio < 0.8:
-            vol_score = +0.4
-        elif is_top and vol_ratio > 1.2:
-            vol_score = -0.4
-        else:
-            vol_score = (vol_ratio - 1) * 0.4
-        score += vol_score * weights['VOL']
-        reasons.append(f"量比={vol_ratio:.2f} → {vol_score:+.2f}")
+    # === 成交量 ===
+    vol_score = (vol_ratio - 1) * 0.4
+    if is_bottom and vol_ratio < 0.8:
+        vol_score += bottom_boost
+    elif is_top and vol_ratio > 1.2:
+        vol_score -= top_penalty
+    vol_score = np.clip(vol_score, -1, 1)
+    score += vol_score * weights['VOL']
+    reasons.append(f"量比={vol_ratio:.2f} → {vol_score:+.2f}")
 
     # === PVR ===
+    pvr_score = np.clip(pvr / 5, -1, 1)
     if is_bottom and pvr < -2:
-        pvr_score = +0.5
+        pvr_score += bottom_boost
     elif is_top and pvr > 2:
-        pvr_score = -0.8
-    else:
-        pvr_score = np.clip(pvr / 5, -1, 1)
+        pvr_score -= top_penalty
+    pvr_score = np.clip(pvr_score, -1, 1)
     score += pvr_score * weights['PVR']
     reasons.append(f"PVR振幅={pvr:.2f} → {pvr_score:+.2f}")
 
-    # === MACD ===
-    macd_strength = row['DIF'] - row['DEA']
+    # === MACD 趨勢化分數 ===
+    macd_trend = macd_strength / (abs(row['DIF']) + 1e-6)
     if is_bottom and macd_strength < 0 and abs(macd_strength) < 0.5:
-        macd_score = +0.5
+        macd_trend += bottom_boost
     elif is_top and macd_strength > 0 and macd_strength < 0.3:
-        macd_score = -0.5
-    else:
-        macd_score = np.clip(macd_strength, -1, 1)
-    score += macd_score * weights['MACD']
-    reasons.append(f"MACD差={macd_strength:.4f} → {macd_score:+.2f}")
+        macd_trend -= top_penalty
+    macd_trend = np.clip(macd_trend, -1, 1)
+    score += macd_trend * weights['MACD']
+    reasons.append(f"MACD差={macd_strength:.4f} → {macd_trend:+.2f}")
+
+    # === 無量下跌判斷 ===
+    low_volume_down = (diff_price < 0) and (vol_ratio < 0.8) and (pvr < 0)
+    if low_volume_down:
+        score += bottom_boost  # 額外加分
+        reasons.append("無量下跌 → +0.3 偏多")
 
     # === 總分標準化 (-100~+100) ===
     max_possible = sum(weights.values())
@@ -469,7 +474,7 @@ def detect_rule3(idx, row, df):
     if is_top: upper_thresh = 25
     if is_bottom: lower_thresh = -25
 
-    # === 決策：1 / 0.5 / -0.5 / -1 ===
+    # === 決策 ===
     if final_score >= upper_thresh:
         trand = 1
         label = '進貨'
@@ -485,7 +490,7 @@ def detect_rule3(idx, row, df):
 
     reason = f"★ {label} ({final_score:+.1f}%) | " + ", ".join(reasons)
 
-    # 寫入結果
+    # 寫入 df
     if abs(row['diff_pvr']) > abs(row['avg_pvr'] * 2):
         df.at[idx, 'TRAND'] = trand
         df.at[idx, 'SCORE'] = round(final_score, 2)
@@ -561,9 +566,12 @@ for master in codes:
     for idx, row in df.iterrows():
         detect_rule3(idx, row, df)
 
-    if display_df:
-        # pd.options.display.colheader_justify = 'left'
-        print(tabulate(df, headers='keys', tablefmt='plain', stralign='left', numalign='left'))
+    if display_df == 1:
+        print(tabulate(df, headers='keys', tablefmt='plain', showindex=False, stralign='left', numalign='left'))
+    elif display_df == 2:
+        df_filtered = df[df['TRAND'].notna()]  # 選出 TRAND 不為 NaN 的列
+        print(
+            tabulate(df_filtered, headers='keys', tablefmt='plain', showindex=False, stralign='left', numalign='left'))
     if display_matplot:
         # plot_stock(stock_code, stock_name, df, df['est_price'].iloc[-1], df['avg_price'].iloc[-1])
         plot_stock(stock_code, stock_name, df)
