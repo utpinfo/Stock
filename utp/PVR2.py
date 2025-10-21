@@ -17,9 +17,8 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock(stock_status=None, stock_code='2464')  # 股票列表
+codes = MySQL.get_stock(stock_status=None, stock_code='4974')  # 股票列表
 sns.set_theme(style="whitegrid")
-
 display_matplot = 1  # 是否顯示圖表
 display_df = 1  # 是否顯示詳細數據
 rec_days = 3  # 最近幾日檢查
@@ -292,12 +291,15 @@ def plot_stock(stock_code, stock_name, df):
                 # 繪製買賣訊號
                 for idx, row in df.iterrows():
                     if 'SCORE' in df.columns:
-                        if row['SCORE'] > 0:
-                            ax.scatter(idx, df['close'].min() * 0.99, marker='^', color='red', s=80)
-                        elif row['SCORE'] < 0:
-                            ax.scatter(idx, df['close'].min() * 0.99, marker='v', color='green', s=80)
-                        elif row['SCORE'] == 0:
-                            ax.scatter(idx, df['close'].min() * 0.99, marker='*', color='orange', s=80)
+                        min_close = df['close'].min() * 0.9  # 在最低收盤價下方0.99倍的位置畫紅色三角形標記
+                        if row['TRAND'] == 1:
+                            ax.scatter(idx, min_close, marker='^', color='red', s=80)
+                        elif row['TRAND'] == 0.5:
+                            ax.scatter(idx, min_close, marker='^', color='pink', s=80)
+                        elif row['TRAND'] == -0.5:
+                            ax.scatter(idx, min_close, marker='v', color='lightgreen', s=80)
+                        elif row['TRAND'] == -1:
+                            ax.scatter(idx, min_close, marker='v', color='green', s=80)
             elif p == 'RSI':
                 ax.axhline(70, color='red', linestyle='dashed', linewidth=0.7)
                 ax.axhline(30, color='green', linestyle='dashed', linewidth=0.7)
@@ -346,164 +348,150 @@ def plot_stock(stock_code, stock_name, df):
     plt.show()
 
 
-def detect_rule2(idx, row):
-    volume_after_extra_prv = []
-    J = row['KDJ'][2]  # KDJ的J指標
-    if (row['volume'] < (row['5_V_MA'])) and (row['close'] < row['5_MA']) and (row['MACD'] > 0) and (row['RSI'] < 70):
-        print(row['price_date'], '放量且價格同上')
-
-    if abs(row['diff_pvr']) > abs(row['avg_pvr'] * 2):  # 差異異常動能量高於2倍平均異常動能量
-        if idx <= 30:  # DEA需要26日計算, 如果數據量過少不做訊號判斷
-            return
-        # T:有能無量， T+1:有量則漲
-        if row['RSI'] > 30:
-            if (row['5_V_MA'] < row['15_V_MA']) and (row['close'] < row['10_MA']):
-                if row['amp_pvr'] < 0:
-                    df.at[idx, 'REASON'] = f"* 出貨訊號(量縮且價格低於10日均, PVR:{row['amp_pvr']})"
-                    df.at[idx, 'TRAND'] = -1
-                elif J is not None and J < 80:
-                    df.at[idx, 'REASON'] = f"* 進貨訊號(量縮且價格低於10日均, KDJ:{J})"
-                    df.at[idx, 'TRAND'] = 1
-                else:
-                    df.at[idx, 'REASON'] = f"* 出貨訊號(量縮且價格低於10日均, KDJ過高)"
-                    df.at[idx, 'TRAND'] = -1
-            elif row['5_V_MA'] < row['15_V_MA'] and row['RSI'] >= 60:
-                df.at[idx, 'REASON'] = f"* 出貨訊號(量縮且RSI高於60, KDJ:{J})"
-                df.at[idx, 'TRAND'] = -1
-            else:
-                df.at[idx, 'REASON'] = "* 觀察中"
-                df.at[idx, 'TRAND'] = 0
-        elif row['RSI'] < 30:
-            df.at[idx, 'REASON'] = "* 進貨訊號3"
-            df.at[idx, 'TRAND'] = 1
-        else:
-            if row['MACD_TREAD'] < 0:
-                df.at[idx, 'REASON'] = "* 出貨訊號4"
-                df.at[idx, 'TRAND'] = -1
-            else:
-                df.at[idx, 'REASON'] = "* 進貨訊號5"
-                df.at[idx, 'TRAND'] = 1
-        current_date = datetime.now()
-        # 计算日期差
-        date_difference = current_date - datetime.strptime(str(row['price_date']), '%Y-%m-%d')
-        if date_difference.days <= rec_days:
-            if df.at[idx, 'TRAND'] == 1:
-                df.at[idx, 'REASON'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
-                stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
-                if not stock_exists:
-                    rec_stocks.append(
-                        {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume']})
-    else:
-        # 出現大能後, 記錄量
-        volume_after_extra_prv.append(row['volume'])
-        if row['volume'] <= (sum(volume_after_extra_prv) / len(volume_after_extra_prv)) * 0.5:
-            # 量小於15均量, 則能量耗盡:看空
-            df.at[idx, 'REASON'] = "* 賣出時機(2.拉高出貨)" + df.at[idx, 'REASON']
-            df.at[idx, 'TRAND'] = -1
-
-
-def detect_rule3(idx, row):
+def detect_rule3(idx, row, df):
     """
-    改進版單筆資料買賣訊號判斷
-    考慮底部吸籌、MACD趨勢、PVR、RSI、KDJ、均線與成交量
-    輸入:
-        row: pd.Series，包含 close, volume, 5_MA, 10_MA, 15_V_MA, 5_V_MA, RSI, MACD, DIF, DEA, amp_pvr, J (KDJ的J)
-    輸出:
-        df.at[idx, 'TRAND'], df.at[idx, 'REASON'], df.at[idx, 'SCORE']
+    detect_rule3_v7 - 強化版買賣訊號判斷
+    - 高位放量/超買偏空
+    - 低位縮量/超賣偏多
+    - 多因子量化得分，最終範圍 -100 ~ +100
+    - 區分正觀望 (trand=0.5) / 負觀望 (trand=-0.5)
     """
-    score = 0
+
+    score = 0.0
     reasons = []
 
-    # RSI
-    if row['RSI'] < 30:
-        score += 1
-        reasons.append('RSI低 (<30)')
-    elif row['RSI'] > 70:
-        score -= 1
-        reasons.append('RSI高 (>70)')
+    # 權重設定（可回測調整）
+    weights = {
+        'RSI': 1.4,
+        'KDJ': 1.2,
+        'MA': 1.0,
+        'VOL': 0.6,
+        'PVR': 0.8,
+        'MACD': 1.0,
+    }
 
-    # KDJ J
-    J = row.get('J', 50)
-    if J < 20:
-        score += 1
-        reasons.append(f'KDJ超賣 (J={J:.1f})')
-    elif J > 80:
-        score -= 1
-        reasons.append(f'KDJ超買 (J={J:.1f})')
+    # 核心指標
+    rsi = row['RSI']
+    J = max(0, min(100, row.get('J', 50)))  # 修正 KDJ J 範圍
+    pvr = row['amp_pvr']
 
-    # 均線
-    if row['close'] > row['10_MA']:
-        score += 0.5
-        reasons.append('價格高於10日均線')
+    # 自動判斷情境
+    is_bottom = (rsi < 40 and J < 40 and pvr < 0)
+    is_top = (rsi > 60 and J > 70 and pvr > 2)
+
+    # === RSI ===
+    if rsi < 30:
+        rsi_score = +1
+    elif rsi < 40:
+        rsi_score = +0.6
+    elif rsi > 80:
+        rsi_score = -1
+    elif rsi > 70:
+        rsi_score = -0.7
+    elif rsi > 60:
+        rsi_score = -0.5
     else:
-        # 若底部條件成立，不扣分
-        if row['RSI'] < 30 and J < 20:
-            score += 0
-            reasons.append('價格低於10日均線 (底部)')
+        rsi_score = (50 - rsi) / 50
+    score += rsi_score * weights['RSI']
+    reasons.append(f"RSI={rsi:.1f} → {rsi_score:+.2f}")
+
+    # === KDJ ===
+    K, D, J = row['KDJ']
+    prev_kdj = row['prev_KDJ']
+    if pd.isna(prev_kdj):
+        prev_K, prev_D, prev_J = row['KDJ']  # 第一筆，用當前代替
+    else:
+        prev_K, prev_D, prev_J = prev_kdj
+
+    # 趨勢判斷（只看上升或下降）
+    kdj_trend = 0
+    if J > prev_J:  # J 上升 → 多方
+        kdj_trend = +1
+    elif J < prev_J:  # J 下降 → 空方
+        kdj_trend = -1
+    else:  # 無明顯變化
+        kdj_trend = 0
+
+    # 轉換到權重
+    kdj_score = np.clip(kdj_trend, -1, 1)
+    score += kdj_score * weights['KDJ']
+    reasons.append(f"KDJ趨勢 J={J:.1f} (前J={prev_J:.1f}) → {kdj_score:+.2f}")
+
+    # === 均線乖離 ===
+    if '10_MA' in row and row['10_MA'] != 0:
+        ma_diff = (row['close'] - row['10_MA']) / row['10_MA']
+        ma_score = np.clip(ma_diff * 4, -1, 1)
+        if is_top and ma_diff > 0:
+            ma_score *= -0.5  # 高位乖離反扣分
+        score += ma_score * weights['MA']
+        reasons.append(f"均線乖離={ma_diff * 100:.1f}% → {ma_score:+.2f}")
+
+    # === 成交量動能 ===
+    if '15_V_MA' in row and row['15_V_MA'] != 0:
+        vol_ratio = row['5_V_MA'] / row['15_V_MA']
+        if is_bottom and vol_ratio < 0.8:
+            vol_score = +0.4
+        elif is_top and vol_ratio > 1.2:
+            vol_score = -0.4
         else:
-            score -= 0.5
-            reasons.append('價格低於10日均線')
+            vol_score = (vol_ratio - 1) * 0.4
+        score += vol_score * weights['VOL']
+        reasons.append(f"量比={vol_ratio:.2f} → {vol_score:+.2f}")
 
-    # 成交量
-    if row['5_V_MA'] > row['15_V_MA']:
-        score += 0.5
-        reasons.append('短期量大於長期量')
+    # === PVR ===
+    if is_bottom and pvr < -2:
+        pvr_score = +0.5
+    elif is_top and pvr > 2:
+        pvr_score = -0.8
     else:
-        # 底部量縮不扣分
-        if row['RSI'] < 30 and J < 20:
-            score += 0
-            reasons.append('短期量小於長期量 (底部吸籌)')
-        else:
-            score -= 0.5
-            reasons.append('短期量小於長期量')
+        pvr_score = np.clip(pvr / 5, -1, 1)
+    score += pvr_score * weights['PVR']
+    reasons.append(f"PVR振幅={pvr:.2f} → {pvr_score:+.2f}")
 
-    # PVR
-    if row['amp_pvr'] > 0:
-        score += 0.5
-        reasons.append('放量異常')
+    # === MACD ===
+    macd_strength = row['DIF'] - row['DEA']
+    if is_bottom and macd_strength < 0 and abs(macd_strength) < 0.5:
+        macd_score = +0.5
+    elif is_top and macd_strength > 0 and macd_strength < 0.3:
+        macd_score = -0.5
     else:
-        # 底部量縮不扣分
-        if row['RSI'] < 30 and J < 20:
-            score += 0.2
-            reasons.append('PVR負值但底部量縮')
-        else:
-            score -= 0.5
-            reasons.append('無量或縮量')
+        macd_score = np.clip(macd_strength, -1, 1)
+    score += macd_score * weights['MACD']
+    reasons.append(f"MACD差={macd_strength:.4f} → {macd_score:+.2f}")
 
-    # MACD + DIF/DEA 趨勢
-    if row['MACD'] > 0 or row['DIF'] > row['DEA']:
-        score += 0.5
-        reasons.append('MACD多頭或DIF上彎')
-    else:
-        score -= 0.5
-        reasons.append('MACD空頭或DIF下彎')
+    # === 總分標準化 (-100~+100) ===
+    max_possible = sum(weights.values())
+    final_score = np.clip(score / max_possible, -1, 1) * 100
 
-    # 決定方向
-    if score >= 1:
+    # 動態觀望閾值
+    upper_thresh = 30
+    lower_thresh = -30
+    if is_top: upper_thresh = 25
+    if is_bottom: lower_thresh = -25
+
+    # === 決策：1 / 0.5 / -0.5 / -1 ===
+    if final_score >= upper_thresh:
         trand = 1
-        reason = "* 進貨訊號 | " + ", ".join(reasons)
-    elif score <= -1:
+        label = '進貨'
+    elif final_score <= lower_thresh:
         trand = -1
-        reason = "* 出貨訊號 | " + ", ".join(reasons)
+        label = '出貨'
+    elif final_score > 0:
+        trand = 0.5
+        label = '正觀望'
     else:
-        trand = 0
-        reason = "* 無明確訊號 | " + ", ".join(reasons)
+        trand = -0.5
+        label = '負觀望'
 
-    # 可加 PVR 過濾
+    reason = f"★ {label} ({final_score:+.1f}%) | " + ", ".join(reasons)
+
+    # 寫入結果
     if abs(row['diff_pvr']) > abs(row['avg_pvr'] * 2):
         df.at[idx, 'TRAND'] = trand
-        df.at[idx, 'SCORE'] = score
+        df.at[idx, 'SCORE'] = round(final_score, 2)
         df.at[idx, 'REASON'] = reason
-    # 優選清單
-    current_date = datetime.now()
-    date_difference = current_date - datetime.strptime(str(row['price_date']), '%Y-%m-%d')
-    if date_difference.days <= rec_days:
-        if df.at[idx, 'TRAND'] == 1:
-            df.at[idx, 'REASON'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
-            stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
-            if not stock_exists:
-                rec_stocks.append(
-                    {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume']})
+
+    return trand, final_score, reason
 
 
 # ===================== 主流程 =====================
@@ -535,6 +523,8 @@ for master in codes:
     kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
     df['KDJ'] = list(zip(kd['STOCHk_9_3_3'], kd['STOCHd_9_3_3'], 3 * kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']))
     df['J'] = kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']
+    df['prev_KDJ'] = df['KDJ'].shift(1)
+
     # 計算MACD (含DIF/DEA)
     if len(df['close']) < 30:  # MACD慢線需要至少26個數值
         print(f"股票:{stock_code} 價格資料太少，無法計算 MACD")
@@ -569,7 +559,7 @@ for master in codes:
     df = calc_ma(df)
     # ===================== 判斷買賣時機 =====================
     for idx, row in df.iterrows():
-        detect_rule3(idx, row)
+        detect_rule3(idx, row, df)
 
     if display_df:
         # pd.options.display.colheader_justify = 'left'
