@@ -45,7 +45,7 @@ def get_price(stock_code, limit, sort='asc', b_price_date=None, e_price_date=Non
     helper = MySQLHelper(host='127.0.0.1', user='root', password='', database='stock')
     helper.connect()
     sql = """
-        SELECT stock_code, price_date, close, volume
+        SELECT stock_code, price_date, open, close, high, low, volume
         FROM (
             SELECT *
             FROM price

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
 """
-OBV(On Balance Volume)(能量潮指標)
+OBV(On Balance Volume)(能量潮指標)(與價同上則看漲, 與價格同下則看跌, 如果與價背離則反轉)
 公式：OBV =  OBV(T-1) + Volume X (math.copysign(1, diff_volume))
 """
 """
@@ -19,7 +19,7 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock(stock_status=None, stock_code='1104')  # 股票列表
+codes = MySQL.get_stock(stock_status=None, stock_code='2464')  # 股票列表
 sns.set(style="whitegrid")
 
 display_matplot = 1  # 是否顯示圖表
@@ -222,8 +222,8 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name, est_price=None, 
 
         # 價格圖上顯示文字
         if ax == axes.get('close'):
-            press_top = df[(df['ind'] != 0) & (df['close'] > cur['close']) & (df['price_date'] < cur['price_date'])]
-            press_low = df[(df['ind'] != 0) & (df['close'] < cur['close']) & (df['price_date'] < cur['price_date'])]
+            press_top = df[(df['TRAND'] != 0) & (df['close'] > cur['close']) & (df['price_date'] < cur['price_date'])]
+            press_low = df[(df['TRAND'] != 0) & (df['close'] < cur['close']) & (df['price_date'] < cur['price_date'])]
             press_top_price = press_top.iloc[-1]['close'] if not press_top.empty else 0
             press_low_price = press_low.iloc[-1]['close'] if not press_low.empty else 0
 
@@ -254,6 +254,7 @@ PANEL_CONFIG = {
     'volume': {'ylabel': '成交量', 'type': 'bar', 'color': '#ff00ff', 'height': 1},
     'RSI': {'ylabel': 'RSI', 'type': 'line', 'color': 'purple', 'height': 1},
     'OBV': {'ylabel': 'OBV', 'type': 'line', 'color': 'purple', 'height': 1},
+    'KDJ': {'ylabel': 'KDJ', 'type': 'line', 'color': 'blue', 'height': 1},
     'MACD': {'ylabel': 'MACD', 'type': 'bar', 'color': 'red', 'height': 0.8},
 }
 
@@ -264,7 +265,7 @@ def plot_stock(stock_code, stock_name, df):
     plt.get_current_fig_manager().set_window_title(f"{stock_code} - {stock_name}")
 
     # 只保留 df 裡有的 panels
-    panels = [p for p in PANEL_CONFIG if p in df.columns or p == 'close']
+    panels = [p for p in PANEL_CONFIG]
 
     # 動態 height_ratios
     ratios = [PANEL_CONFIG[p]['height'] for p in panels]
@@ -287,15 +288,24 @@ def plot_stock(stock_code, stock_name, df):
                         ax.plot(df.index, df[ma_col], label=f'{ma}日均線', linestyle='dashed')
                 # 繪製買賣訊號
                 for idx, row in df.iterrows():
-                    if 'ind' in df.columns:
-                        if row['ind'] > 0:
+                    if 'TRAND' in df.columns:
+                        if row['TRAND'] > 0:
                             ax.scatter(idx, df['close'].min() * 0.99, marker='^', color='red', s=80)
-                        elif row['ind'] < 0:
+                        elif row['TRAND'] < 0:
                             ax.scatter(idx, df['close'].min() * 0.99, marker='v', color='green', s=80)
             elif p == 'RSI':
                 ax.axhline(70, color='red', linestyle='dashed', linewidth=0.7)
                 ax.axhline(30, color='green', linestyle='dashed', linewidth=0.7)
                 ax.plot(df.index, df[p], color=cfg['color'], label=p)
+            elif p == 'KDJ':
+                # 畫三條線
+                ax.plot(df.index, [x[0] for x in df['KDJ']], label='K', color='blue', linewidth=1)
+                ax.plot(df.index, [x[1] for x in df['KDJ']], label='D', color='orange', linewidth=1)
+                ax.plot(df.index, [x[2] for x in df['KDJ']], label='J', color='purple', linewidth=1)
+
+                # 超買/超賣區間
+                ax.axhline(80, color='red', linestyle='--', alpha=0.5)
+                ax.axhline(20, color='green', linestyle='--', alpha=0.5)
             else:
                 ax.plot(df.index, df[p], color=cfg['color'], label=p)
         elif cfg['type'] == 'bar' and p in df:
@@ -331,36 +341,40 @@ def plot_stock(stock_code, stock_name, df):
 
 def detect_rule2(idx, row):
     volume_after_extra_prv = []
+    if (row['volume'] < (row['5_V_MA'])) and (row['close'] < row['5_MA']) and (row['MACD'] > 0) and (row['RSI'] < 70):
+        print(row['price_date'], '放量且價格同上')
 
-    if abs(row['diff_pvr']) > abs(row['avg_pvr'] * 2):
+    if abs(row['diff_pvr']) > abs(row['avg_pvr'] * 2):  # 差異異常動能量高於2倍平均異常動能量
         if idx <= 30:  # DEA需要26日計算, 如果數據量過少不做訊號判斷
             return
         # T:有能無量， T+1:有量則漲
         if row['RSI'] > 30:
-            print(row['price_date'], row['5_V_MA'], row['15_V_MA'], row['close'], row['10_MA'])
             if (row['5_V_MA'] < (row['15_V_MA'])) and (row['close'] < row['10_MA']):  # 量縮且價格單價10日均下
-                df.at[idx, 'result'] = "* 進貨訊號(量縮且價格單價10日均下))"
-                df.at[idx, 'ind'] = 1
+                df.at[idx, 'REASON'] = "* 進貨訊號(量縮且價格單價10日均下))"
+                df.at[idx, 'TRAND'] = 1
+            elif (row['5_V_MA'] < row['15_V_MA'] and row['RSI'] >= 60):
+                df.at[idx, 'REASON'] = "* 出貨訊號(量縮且RSI高於60)"
+                df.at[idx, 'TRAND'] = -1
             else:
-                df.at[idx, 'result'] = "* 出貨訊號2"
-                df.at[idx, 'ind'] = -1
+                df.at[idx, 'REASON'] = "* 出貨訊號2"
+                df.at[idx, 'TRAND'] = -1
         elif row['RSI'] < 30:
-            df.at[idx, 'result'] = "* 進貨訊號3"
-            df.at[idx, 'ind'] = 1
+            df.at[idx, 'REASON'] = "* 進貨訊號3"
+            df.at[idx, 'TRAND'] = 1
         else:
             if row['MACD_TREAD'] < 0:
-                df.at[idx, 'result'] = "* 出貨訊號4"
-                df.at[idx, 'ind'] = -1
+                df.at[idx, 'REASON'] = "* 出貨訊號4"
+                df.at[idx, 'TRAND'] = -1
             else:
-                df.at[idx, 'result'] = "* 進貨訊號5"
-                df.at[idx, 'ind'] = 1
+                df.at[idx, 'REASON'] = "* 進貨訊號5"
+                df.at[idx, 'TRAND'] = 1
         current_date = datetime.now()
         # 计算日期差
         date_difference = current_date - datetime.strptime(str(row['price_date']), '%Y-%m-%d')
         if date_difference.days <= rec_days:
             if row['avg_volume'] >= rec_volume:
-                if df.at[idx, 'ind'] == 1:
-                    df.at[idx, 'result'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
+                if df.at[idx, 'TRAND'] == 1:
+                    df.at[idx, 'REASON'] = f"股票:{stock_code},{rec_days}日内存在買入時機"
                     stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
                     if not stock_exists:
                         rec_stocks.append(
@@ -370,8 +384,8 @@ def detect_rule2(idx, row):
         volume_after_extra_prv.append(row['volume'])
         if row['volume'] <= (sum(volume_after_extra_prv) / len(volume_after_extra_prv)) * 0.5:
             # 量小於15均量, 則能量耗盡:看空
-            df.at[idx, 'result'] = "* 賣出時機(2.拉高出貨)" + df.at[idx, 'result']
-            df.at[idx, 'ind'] = -1
+            df.at[idx, 'REASON'] = "* 賣出時機(2.拉高出貨)" + df.at[idx, 'REASON']
+            df.at[idx, 'TRAND'] = -1
 
 
 # ===================== 主流程 =====================
@@ -387,8 +401,8 @@ for master in codes:
     df['diff_price'] = df['close'].diff().fillna(0)
     df['diff_volume'] = df['volume'].diff().fillna(0)
     # 異常主力
-    df['diff_pvr'] = np.where(df['diff_volume'] != 0, df['diff_price'] / (df['diff_volume'] / 10000), 0)  # 單位量差
-    df['avg_pvr'] = df['diff_pvr'].abs().rolling(window=10, min_periods=1).mean()
+    df['diff_pvr'] = np.where(df['diff_volume'] != 0, df['diff_price'] / (df['diff_volume'] / 10000), 0)  # 差價量比
+    df['avg_pvr'] = df['diff_pvr'].abs().rolling(window=10, min_periods=1).mean()  # 近10日平均差價量比
     # df['amp_pvr'] = (df['diff_pvr'] / df['avg_pvr']).fillna(0).round(decimal_place)
     df['amp_pvr'] = (
         (df['diff_pvr'] / df['avg_pvr']).replace([np.inf, -np.inf], 0).fillna(0)
@@ -398,6 +412,11 @@ for master in codes:
     df['avg_price'] = df['close'].expanding().mean().round(decimal_place)
     df['avg_volume'] = df['volume'].expanding().mean().round(decimal_place)
     df['RSI'] = ta.rsx(df['close'], length=14)  # 指定window=14
+
+    # 計算 KDJ
+    kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
+    df['KDJ'] = list(zip(kd['STOCHk_9_3_3'], kd['STOCHd_9_3_3'], 3 * kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']))
+
     # 計算MACD (含DIF/DEA)
     if len(df['close']) < 30:  # MACD慢線需要至少26個數值
         print(f"股票:{stock_code} 價格資料太少，無法計算 MACD")
@@ -412,7 +431,7 @@ for master in codes:
     weights = np.arange(1, 4)  # [1,2,3,4,5]，越近越重
     df['MACD_5wma'] = df['MACD'].rolling(3).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
     df['MACD_TREAD'] = np.where(df['MACD'] > df['MACD_5wma'], 1, np.where(df['MACD'] < df['MACD_5wma'], -1, 0))  # 判斷趨勢
-    # df.drop(columns=['MACD_5wma'], inplace=True) # 刪掉中間欄位（可選）
+    df.drop(columns=['MACD_5wma'], inplace=True)  # 刪掉中間欄位（可選）
 
     # 偵測金叉、死叉
     df['MACD_SIG'] = 0.0
@@ -430,8 +449,8 @@ for master in codes:
 
     # 計算均線
     df = calc_ma(df)
-    df['ind'] = 0
-    df['result'] = ""
+    df['TRAND'] = 0
+    df['REASON'] = ""
     # ===================== 判斷買賣時機 =====================
     for idx, row in df.iterrows():
         detect_rule2(idx, row)
