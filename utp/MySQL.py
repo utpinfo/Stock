@@ -14,15 +14,23 @@ def get_last_trade_date(stock_code, year, month):
 def get_stock(stock_status='10', stock_code=None):
     helper = MySQLHelper(host='127.0.0.1', user='root', password='', database='stock')
     helper.connect()
-    params = None
-    sql = "select * from stock"
+
+    sql = "SELECT * FROM stock"
+    params = []
+
     if stock_code:
-        sql += " where stock_code = %s"
-        params = (stock_code)
+        if isinstance(stock_code, (list, tuple)):  # 多筆代碼
+            placeholders = ', '.join(['%s'] * len(stock_code))
+            sql += f" WHERE stock_code IN ({placeholders})"
+            params.extend(stock_code)
+        else:  # 單筆代碼
+            sql += " WHERE stock_code = %s"
+            params.append(stock_code)
     elif stock_status:
-        sql += " where stock_status = %s"
-        params = (stock_status)
-    data = helper.execute_query(sql, params)
+        sql += " WHERE stock_status = %s"
+        params.append(stock_status)
+
+    data = helper.execute_query(sql, tuple(params))
     helper.close()
     return data
 

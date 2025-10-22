@@ -8,6 +8,8 @@ from tabulate import tabulate
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
+from scipy.optimize import curve_fit
+
 """
 OBV(On Balance Volume)(能量潮指標)(與價同上則看漲, 與價格同下則看跌, 如果與價背離則反轉)
 公式：OBV =  OBV(T-1) + Volume X (math.copysign(1, diff_volume))
@@ -17,10 +19,11 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-codes = MySQL.get_stock(stock_status=None, stock_code='6257')  # 股票列表
+stock_code = ['3324']
+codes = MySQL.get_stock(stock_status=90, stock_code=[])  # 股票列表
 sns.set_theme(style="whitegrid")
 display_matplot = 1  # 是否顯示圖表
-display_df = 2  # 是否顯示詳細數據 (0.不顯示 1.全部顯示 2.只顯示趨勢)
+display_df = 1  # 是否顯示詳細數據 (0.不顯示 1.全部顯示 2.只顯示趨勢)
 rec_days = 3  # 最近幾日檢查
 rec_volume = 1000  # 最小成交量
 rec_stocks = []  # 記錄符合條件股票
@@ -165,6 +168,110 @@ def calc_ma(df):
     return df
 
 
+# ===================== 拉高出貨 + 低位承接檢測 =====================
+def detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5,
+                         upper_shadow_thresh=0.4, lower_shadow_thresh=0.25,
+                         rsi=None, macd=None, trend_window=20, cum_window=3):
+    """
+    改良版：降低假訊號的拉高出貨與低位承接判斷
+    df: DataFrame 必須包含 ['close','high','low','volume']
+    pct_thresh_up: 漲幅門檻
+    pct_thresh_acc: 漲幅上限
+    vol_window: 成交量平均期
+    upper_shadow_thresh: 長上影線比例
+    lower_shadow_thresh: 長下影線比例
+    rsi: 可選 RSI 欄位名稱
+    macd: 可選 MACD 快線欄位名稱
+    trend_window: 趨勢判斷均線期
+    cum_window: 前幾日累積漲跌過濾
+    """
+    df = df.copy()
+
+    # 前一日收盤
+    df['prev_close'] = df['close'].shift(1)
+    df['漲幅'] = (df['close'] - df['prev_close']) / df['prev_close'] * 100
+
+    # 移動平均及成交量 z-score
+    df['avg_vol'] = df['volume'].rolling(vol_window).mean()
+    df['vol_std'] = df['volume'].rolling(vol_window).std()
+    df['vol_z'] = (df['volume'] - df['avg_vol']) / df['vol_std']
+
+    # 上下影線比例與實體比
+    df['實體長'] = abs(df['close'] - df['prev_close'])
+    df['上影線比'] = (df['high'] - df[['close', 'prev_close']].max(axis=1)) / df['實體長']
+    df['下影線比'] = (df[['close', 'prev_close']].min(axis=1) - df['low']) / df['實體長']
+
+    # 趨勢均線
+    df['MA_trend'] = df['close'].rolling(trend_window).mean()
+    df['MA_short'] = df['close'].rolling(5).mean()  # 短期均線過濾
+
+    # 前 cum_window 日累積漲幅
+    df['cum_pct'] = df['漲幅'].rolling(cum_window).sum()
+
+    # ================= 拉高出貨 =================
+    df['score_up'] = 0
+    df['score_up'] += (df['漲幅'] > pct_thresh_up).astype(int)
+    df['score_up'] += (df['vol_z'] > 0.5).astype(int)  # 成交量明顯放大
+    df['score_up'] += (df['上影線比'] > upper_shadow_thresh).astype(int)
+    df['score_up'] += (df['close'] > df['MA_short']).astype(int)  # 短期多頭濾網
+    if rsi is not None:
+        df['score_up'] += (df[rsi] > 75).astype(int)
+    if macd is not None:
+        df['score_up'] += (df[macd] < 0).astype(int)  # 快線向下
+    df['拉高出貨'] = (df['score_up'] >= 3) & (df['close'] > df['MA_trend']) & (df['cum_pct'] > pct_thresh_up * 1.5)
+
+    # ================= 低位承接 =================
+    df['score_acc'] = 0
+    df['score_acc'] += ((df['漲幅'] >= 0) & (df['漲幅'] <= pct_thresh_acc)).astype(int)
+    df['score_acc'] += (df['vol_z'] < 0.5).astype(int)  # 成交量適中或略低
+    df['score_acc'] += (df['下影線比'] > lower_shadow_thresh).astype(int)
+    df['score_acc'] += (df['close'] < df['MA_short']).astype(int)  # 短期弱勢濾網
+    if rsi is not None:
+        df['score_acc'] += (df[rsi] < 25).astype(int)
+    if macd is not None:
+        df['score_acc'] += (df[macd] > 0).astype(int)  # 快線向上
+    df['低位承接'] = (df['score_acc'] >= 3) & (df['close'] < df['MA_trend']) & (df['cum_pct'] >= -pct_thresh_up)
+
+    # 移除輔助欄位
+    df.drop(columns=['score_up', 'score_acc', 'prev_close', 'vol_std', '實體長', 'MA_trend', 'MA_short', 'cum_pct'],
+            inplace=True)
+
+    return df
+
+
+# ==================== 預估函式區 ====================
+def exp_func(x, a, b):
+    """指數擬合公式 y = a * b^x"""
+    return a * (b ** x)
+
+
+def predict_next(df, days=7):
+    """根據歷史 close，自動預測未來 N 天"""
+    x_data = np.arange(len(df))
+    y_data = df['close'].values
+
+    # 指數擬合
+    popt, _ = curve_fit(exp_func, x_data, y_data, p0=(1000, 1.02))
+    a, b = popt
+
+    # 預測未來 days 天
+    future_x = np.arange(len(df), len(df) + days)
+    future_y = exp_func(future_x, a, b)
+    future_dates = pd.date_range(df['price_date'].iloc[-1] + pd.Timedelta(days=1), periods=days, freq='D').date
+
+    result = pd.DataFrame({
+        '日期': future_dates,
+        'est_close': future_y.round(0).astype(int)
+    })
+
+    print(f"=== 指數趨勢線方程式 ===")
+    print(f"y = {a:.0f} × {b:.4f}^x")
+    print("\n=== 未來預測 ===")
+    print(result, "\n")
+
+    return result
+
+
 # 定义鼠标移动事件处理程序
 def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
     """滑鼠移動事件：在所有子圖同步顯示指示線，橫線對應各軸資料"""
@@ -226,10 +333,14 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
             press_top_price = press_top.iloc[-1]['close'] if not press_top.empty else 0
             press_low_price = press_low.iloc[-1]['close'] if not press_low.empty else 0
 
-            msg = (f"日期: {cur['price_date']}\n"
-                   f"PVR: {cur.get('diff_pvr', 0):.2f}\n"
-                   f"價格: {cur.get('close', 0):.2f}, 量: {cur.get('volume', 0)}\n"
-                   f"(壓力: {press_top_price:.2f} 支撐: {press_low_price:.2f})")
+            msg = f"日期: {cur['price_date']}\n"
+            msg += f"PVR: {cur.get('diff_pvr', 0):.2f}\n"
+            if not pd.isna(cur.get('close')):
+                msg += f"價格: {cur.get('close', 0):.2f}, 量: {cur.get('volume', 0)}\n"
+            else:
+                msg += f"估價: {cur.get('est_close')}, 量: {cur.get('volume', 0)}\n"
+            msg += f"(壓力: {press_top_price:.2f} 支撐: {press_low_price:.2f})"
+
             text = ax.text(0.98, 0.98, msg, ha='right', va='top', transform=ax.transAxes,
                            color='red', fontsize=10, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
             ax._indicator_texts = [text]
@@ -239,7 +350,10 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
         ax = axes['close']
         msg = f"{stock_name}({stock_code})"
         msg += f"\n指標價:{cur.get('est_price')} 均價:{cur.get('avg_price')}"
-        msg += f"\n價:{cur.get('close')} 量:{cur.get('volume')}"
+        if not pd.isna(cur.get('close')):
+            msg += f"\n價:{cur.get('close')} 量:{cur.get('volume')}"
+        else:
+            msg += f"\n估價:{cur.get('est_close')} 量:{cur.get('volume')}"
         msg += f"\n(壓:{press_top_price} 支:{press_low_price})"
         if not pd.isna(cur.get('REASON')):
             msg += f"\n{cur.get('REASON')}"
@@ -252,8 +366,8 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
 # ===================== 畫圖 =====================
 PANEL_CONFIG = {
     'close': {'ylabel': '價格', 'type': 'line', 'color': 'red', 'height': 2},
-    'amp_pvr': {'ylabel': '波動PVR', 'type': 'line', 'color': 'blue', 'height': 1},
     'volume': {'ylabel': '成交量', 'type': 'bar', 'color': '#ff00ff', 'height': 1},
+    'amp_pvr': {'ylabel': '波動PVR', 'type': 'line', 'color': 'blue', 'height': 1},
     'RSI': {'ylabel': 'RSI', 'type': 'line', 'color': 'purple', 'height': 1},
     'OBV': {'ylabel': 'OBV', 'type': 'line', 'color': 'purple', 'height': 1},
     'KDJ': {'ylabel': 'KDJ', 'type': 'line', 'color': 'blue', 'height': 1},
@@ -283,6 +397,8 @@ def plot_stock(stock_code, stock_name, df):
         if cfg['type'] == 'line' and p in df:
             if p == 'close':
                 ax.plot(df.index, df[p], color=cfg['color'], label='價格', linewidth=2)
+                ax.plot(df.index, df['est_close'], color=cfg['color'], label='預測close', linewidth=1,
+                        linestyle='dashed')
                 # 繪製均線
                 for ma in [5, 10, 15]:
                     ma_col = f'{ma}_MA'
@@ -306,19 +422,43 @@ def plot_stock(stock_code, stock_name, df):
                 ax.plot(df.index, df[p], color=cfg['color'], label=p)
             elif p == 'KDJ':
                 # 畫三條線
-                ax.plot(df.index, [x[0] for x in df['KDJ']], label='K', color='blue', linewidth=1)
-                ax.plot(df.index, [x[1] for x in df['KDJ']], label='D', color='orange', linewidth=1)
-                ax.plot(df.index, [x[2] for x in df['KDJ']], label='J', color='purple', linewidth=1)
+                K = [x[0] if isinstance(x, (list, tuple)) else np.nan for x in df['KDJ']]
+                D = [x[1] if isinstance(x, (list, tuple)) else np.nan for x in df['KDJ']]
+                J = [x[2] if isinstance(x, (list, tuple)) else np.nan for x in df['KDJ']]
+
+                ax.plot(df.index, K, label='K', color='blue', linewidth=1)
+                ax.plot(df.index, D, label='D', color='orange', linewidth=1)
+                ax.plot(df.index, J, label='J', color='purple', linewidth=1)
 
                 # 超買/超賣區間
                 ax.axhline(80, color='red', linestyle='--', alpha=0.5)
                 ax.axhline(20, color='green', linestyle='--', alpha=0.5)
+
+
+                gold_cross_idx = [i for i in range(1, len(K)) if K[i] > D[i] and K[i - 1] <= D[i - 1]]
+                death_cross_idx = [i for i in range(1, len(K)) if K[i] < D[i] and K[i - 1] >= D[i - 1]]
+
+                ax.scatter(gold_cross_idx, [K[i] for i in gold_cross_idx], marker='^', color='red', s=50, label='金叉')
+                ax.scatter(death_cross_idx, [K[i] for i in death_cross_idx], marker='v', color='green', s=50, label='死叉')
             else:
                 ax.plot(df.index, df[p], color=cfg['color'], label=p)
         elif cfg['type'] == 'bar' and p in df:
             if p == 'macd':
                 ax.bar(df.index, df['MACD'].where(df['MACD'] > 0, 0), color='red', alpha=0.6)
                 ax.bar(df.index, df['MACD'].where(df['MACD'] < 0, 0), color='blue', alpha=0.6)
+            elif p == 'volume':
+                ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6)
+
+                y_marker = -df['volume'].min() * 0.8  # 標記位置
+
+                # 拉高出貨 scatter（只加一次 label）
+                lh_indices = df.index[df['拉高出貨'].notna() & df['拉高出貨']]
+                ax.scatter(lh_indices, [y_marker] * len(lh_indices), marker='v', color='green', s=80, label='拉高出貨')
+
+                # 低位承接 scatter（只加一次 label）
+                dw_indices = df.index[df['低位承接'].notna() & df['低位承接']]
+                ax.scatter(dw_indices, [y_marker] * len(dw_indices), marker='^', color='red', s=80, label='低位承接')
+                # ax.set_ylim(y_marker - 50, df[p].max() * 1.1)
             else:
                 ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6)
         ax.set_ylabel(cfg['ylabel'])
@@ -350,19 +490,18 @@ def plot_stock(stock_code, stock_name, df):
 
 def detect_rule3(idx, row, df):
     """
-    detect_rule3_v10 - 支援無量下跌判斷
+    detect_rule3_v15 - 支援金叉/死叉型態 + 築底修正
     - 高位放量/超買 → 偏空
     - 低位縮量/超賣 → 偏多
+    - 死叉分為高檔死叉（偏空）與低檔死叉（築底偏多）
     - 無量下跌 → 底部偏多加分
     - RSI / KDJ / MACD 使用趨勢化比例分數
-    - 動態觀望閾值
-    - 正觀望 trand=0.5 / 負觀望 trand=-0.5
     """
 
     score = 0.0
     reasons = []
 
-    # 1. 權重設定
+    # 權重設定
     weights = {
         'RSI': 1.4,
         'KDJ': 1.0,
@@ -372,13 +511,18 @@ def detect_rule3(idx, row, df):
         'MACD': 1.0,
     }
 
-    # 2. 底部 / 高位加權
-    bottom_boost = 5  # 底部偏多加分
-    top_penalty = 5  # 高位偏空扣分
+    # 底部 / 高位加權
+    bottom_boost = 5
+    top_penalty = 5
 
-    # 核心指標
+    # === 基本資料 ===
     rsi = row['RSI']
-    K, D, J = row['KDJ']
+    kdj = row['KDJ']
+    if isinstance(kdj, (list, tuple)):
+        K, D, J = kdj
+    else:
+        K, D, J = np.nan, np.nan, np.nan
+
     pvr = row['amp_pvr']
     macd_strength = row['DIF'] - row['DEA']
     diff_price = row['diff_price']
@@ -386,11 +530,16 @@ def detect_rule3(idx, row, df):
     prev_rsi = row.get('prev_RSI', rsi)
     prev_J = row.get('prev_J', J)
 
-    # 判斷底部 / 高位
+    # 前一日KDJ（供金叉死叉判斷）
+    prev_K, prev_D, _ = (np.nan, np.nan, np.nan)
+    if 'prev_KDJ' in row and isinstance(row['prev_KDJ'], (list, tuple)):
+        prev_K, prev_D, _ = row['prev_KDJ']
+
+    # === 底部 / 高位 ===
     is_bottom = (rsi < 40 and J < 40 and pvr < 0)
     is_top = (rsi > 60 and J > 70 and pvr > 2)
 
-    # 計算量比
+    # === 量比 ===
     vol_ratio = 1
     if '15_V_MA' in row and row['15_V_MA'] != 0:
         vol_ratio = row['5_V_MA'] / row['15_V_MA']
@@ -406,13 +555,37 @@ def detect_rule3(idx, row, df):
     score += rsi_score * weights['RSI']
     reasons.append(f"RSI={rsi:.1f} (前{prev_rsi:.1f}) → {rsi_score:+.2f}")
 
-    # === KDJ 趨勢化分數 ===
+    # === 🔥 KDJ 金叉／死叉 + 趨勢分數 ===
     kdj_diff = J - prev_J
     kdj_score = np.clip(kdj_diff / 50, -1, 1)
+
+    # --- 新增：金叉 / 死叉 判斷 ---
+    is_gold_cross = (K > D) and (prev_K <= prev_D)
+    is_dead_cross = (K < D) and (prev_K >= prev_D)
+
+    # 高檔死叉 / 低檔死叉分流
+    is_top_dead = is_dead_cross and (K > 70 or D > 70)
+    is_bottom_dead = is_dead_cross and (K < 40 and D < 40 and J < 30)
+
+    if is_gold_cross:
+        kdj_score += 0.6
+        reasons.append("KDJ金叉 → 多方啟動")
+    elif is_top_dead:
+        kdj_score -= 0.6
+        reasons.append("KDJ高檔死叉 → 出貨警訊")
+    elif is_bottom_dead:
+        kdj_score += 0.3
+        reasons.append("KDJ低檔死叉 → 築底吸籌")
+    elif is_dead_cross:
+        kdj_score -= 0.3
+        reasons.append("KDJ死叉 → 趨勢轉弱")
+
+    # 原底部 / 高位 加權
     if is_bottom:
         kdj_score += bottom_boost
     elif is_top:
         kdj_score -= top_penalty
+
     kdj_score = np.clip(kdj_score, -1, 1)
     score += kdj_score * weights['KDJ']
     reasons.append(f"KDJ趨勢 J={J:.1f} (前{prev_J:.1f}) → {kdj_score:+.2f}")
@@ -448,7 +621,7 @@ def detect_rule3(idx, row, df):
     score += pvr_score * weights['PVR']
     reasons.append(f"PVR振幅={pvr:.2f} → {pvr_score:+.2f}")
 
-    # === MACD 趨勢化分數 ===
+    # === MACD ===
     macd_trend = macd_strength / (abs(row['DIF']) + 1e-6)
     if is_bottom and macd_strength < 0 and abs(macd_strength) < 0.5:
         macd_trend += bottom_boost
@@ -461,36 +634,30 @@ def detect_rule3(idx, row, df):
     # === 無量下跌判斷 ===
     low_volume_down = (diff_price < 0) and (vol_ratio < 0.8) and (pvr < 0)
     if low_volume_down:
-        score += bottom_boost  # 額外加分
-        reasons.append("無量下跌 → +0.3 偏多")
+        score += bottom_boost
+        reasons.append("無量下跌 → 偏多加分")
 
-    # === 總分標準化 (-100~+100) ===
+    # === 分數標準化 ===
     max_possible = sum(weights.values())
     final_score = np.clip(score / max_possible, -1, 1) * 100
 
     # 動態觀望閾值
-    upper_thresh = 30
-    lower_thresh = -30
+    upper_thresh, lower_thresh = 30, -30
     if is_top: upper_thresh = 25
     if is_bottom: lower_thresh = -25
 
     # === 決策 ===
     if final_score >= upper_thresh:
-        trand = 1
-        label = '進貨'
+        trand, label = 1, '進貨'
     elif final_score <= lower_thresh:
-        trand = -1
-        label = '出貨'
+        trand, label = -1, '出貨'
     elif final_score > 0:
-        trand = 0.5
-        label = '正觀望'
+        trand, label = 0.5, '正觀望'
     else:
-        trand = -0.5
-        label = '負觀望'
+        trand, label = -0.5, '負觀望'
 
     reason = f"★ {label} ({final_score:+.1f}%) | " + ", ".join(reasons)
 
-    # 寫入 df
     if abs(row['diff_pvr']) > abs(row['avg_pvr'] * 2):
         df.at[idx, 'TRAND'] = trand
         df.at[idx, 'SCORE'] = round(final_score, 2)
@@ -526,8 +693,11 @@ for master in codes:
 
     # 計算 KDJ
     kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
-    df['KDJ'] = list(zip(kd['STOCHk_9_3_3'], kd['STOCHd_9_3_3'], 3 * kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']))
-    df['J'] = kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']
+    K = kd['STOCHk_9_3_3'].round(decimal_place)
+    D = kd['STOCHd_9_3_3'].round(decimal_place)
+    J = (kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']).round(decimal_place)
+    df['KDJ'] = list(zip(K, D, J))
+    df['J'] = J
     df['prev_KDJ'] = df['KDJ'].shift(1)
 
     # 計算MACD (含DIF/DEA)
@@ -562,6 +732,23 @@ for master in codes:
 
     # 計算均線
     df = calc_ma(df)
+    # 拉高出貨 + 低位承接檢測
+    df = detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5, rsi='RSI', macd='MACD')
+
+
+    # 計算每日增長率
+    df['日增長率'] = df['close'].pct_change() * 100
+    df['週增長率'] = df['close'].pct_change(periods=7) * 100
+    df['累積增長'] = (1 + df['日增長率'] / 100).cumprod() * 100 - 100
+    df['日增長率_%'] = df['日增長率'].fillna(0).round(1).astype(str) + '%'
+    df['指數增長率'] = df['close'] / df['close'].shift(1)
+    print("=== 每日增長率結果 ===")
+    print(df[['price_date', 'close', '日增長率_%', '指數增長率']].round(3), "\n")
+    # 預測未來 7 天
+    predictions = predict_next(df, days=7)
+    df['est_close'] = df['close']
+    df = pd.concat([df, predictions.rename(columns={'日期': 'price_date'})], ignore_index=True)
+
     # ===================== 判斷買賣時機 =====================
     for idx, row in df.iterrows():
         detect_rule3(idx, row, df)

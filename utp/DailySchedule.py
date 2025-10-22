@@ -12,7 +12,7 @@ def get_daily_schedule(stock_kind, stock_code, isin_code):
 
 
 # 獲取股票代碼
-codes = MySQL.get_stock(None, '4974')
+codes = MySQL.get_stock(90)
 # 將股票代碼分成10組
 chunk_size = len(codes) // threads + (len(codes) % threads > 0)
 chunks = [codes[i:i + chunk_size] for i in range(0, len(codes), chunk_size)]
