@@ -8,4 +8,4 @@ seaborn
 matplotlib
 pandas_ta
 tabulate
-humps
+pyhumps
