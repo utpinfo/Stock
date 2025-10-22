@@ -20,7 +20,7 @@ expanding: 行累積合計(階段合計)
 decimal_place = 2
 analyse_days = 90
 stock_code = ['3324']
-codes = MySQL.get_stock(stock_status=None, stock_code=stock_code)  # 股票列表
+codes = MySQL.get_stock(stock_status=90, stock_code=[])  # 股票列表
 sns.set_theme(style="whitegrid")
 display_matplot = 1  # 是否顯示圖表
 display_df = 1  # 是否顯示詳細數據 (0.不顯示 1.全部顯示 2.只顯示趨勢)
@@ -291,7 +291,7 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
         axes.get('volume'): cur.get('volume', 0),
         axes.get('RSI'): cur.get('RSI', 0),
         axes.get('OBV'): cur.get('OBV', 0),
-        axes.get('amp_pvr'): cur.get('amp_pvr', 0),
+        axes.get('ampPvr'): cur.get('ampPvr', 0),
         axes.get('MACD'): cur.get('MACD', 0),
         axes.get('KDJ'): cur.get('KDJ', 0),
     }
@@ -367,7 +367,7 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
 PANEL_CONFIG = {
     'close': {'ylabel': '價格', 'type': 'line', 'color': 'red', 'height': 2},
     'volume': {'ylabel': '成交量', 'type': 'bar', 'color': '#ff00ff', 'height': 1},
-    'amp_pvr': {'ylabel': '波動PVR', 'type': 'line', 'color': 'blue', 'height': 1},
+    'ampPvr': {'ylabel': '波動PVR', 'type': 'line', 'color': 'blue', 'height': 1},
     'RSI': {'ylabel': 'RSI', 'type': 'line', 'color': 'purple', 'height': 1},
     'OBV': {'ylabel': 'OBV', 'type': 'line', 'color': 'purple', 'height': 1},
     'KDJ': {'ylabel': 'KDJ', 'type': 'line', 'color': 'blue', 'height': 1},
