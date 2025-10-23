@@ -171,7 +171,7 @@ def calc_ma(df):
 import numpy as np
 import pandas as pd
 
-
+# ===================== 異常波動 =====================
 def calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2):
     """
     計算異常主力指標（高效 vectorized 版本）：
