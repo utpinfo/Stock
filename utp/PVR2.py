@@ -22,9 +22,10 @@ analyse_days = 90
 stock_code = ['2301']
 codes = MySQL.get_stock(stock_status=90, stock_code=[])  # 股票列表
 sns.set_theme(style="whitegrid")
-display_matplot = 1  # 是否顯示圖表
+display_matplot = 0  # 是否顯示圖表
 display_df = 1  # 是否顯示詳細數據 (0.不顯示 1.全部顯示 2.只顯示趨勢)
 rec_days = 3  # 最近幾日檢查
+fut_days = 7  # 推估日數
 rec_volume = 1000  # 最小成交量
 rec_stocks = []  # 記錄符合條件股票
 threshold_macd = 0.05
@@ -775,6 +776,15 @@ def detect_rule3(idx, row, df):
         df.at[idx, 'score'] = round(final_score, 2)
         df.at[idx, 'reason'] = reason
 
+    current_date = datetime.now()
+    # 计算日期差
+    date_difference = current_date - datetime.strptime(str(row['priceDate']), '%Y-%m-%d')
+    if date_difference.days <= rec_days:
+        if trand > 0.5:
+            stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
+            if not stock_exists:
+                rec_stocks.append(
+                    {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume'], 'reason': reason})
     return trand, final_score, reason
 
 
@@ -843,8 +853,16 @@ for master in codes:
     for idx, row in df.iterrows():
         detect_rule3(idx, row, df)
     # 4. 預測未來 7 天
-    df = add_growth_and_forecast(df, days_ahead=7)
+    df = add_growth_and_forecast(df, days_ahead=fut_days)
 
+    ratio = df['estClose_adj'].iloc[-1] / df['close'].iloc[-fut_days - 1]
+    reason = f"{fut_days}日後推估價 / 現價比例: {ratio:.4f}"
+    # print(reason)
+    if ratio > 1.1:
+        stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
+        if not stock_exists:
+            rec_stocks.append(
+                {'stock_code': stock_code, 'stock_name': stock_name, 'reason': reason})
     # ===================== 圖像輸出 =====================
     if display_df == 1:
         print(tabulate(df, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
@@ -854,6 +872,9 @@ for master in codes:
             tabulate(df_filtered, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
     if display_matplot:
         plot_stock(stock_code, stock_name, df)
-print("指標股票")
-for stock_code in rec_stocks:
-    print(f"{stock_code}")
+
+print("**************** 推薦股票 ********************")
+rec_stock = []
+for row in rec_stocks:
+    rec_stock.append([row['stock_code'], row['stock_name'], row['reason']])
+print(tabulate(rec_stock, headers=['Stock Code', 'Stock Name', 'Reason'], tablefmt='grid'))
