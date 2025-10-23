@@ -8,7 +8,7 @@ threads = 300
 
 
 def get_daily_schedule(stock_kind, stock_code, isin_code):
-    DailySchedule(stock_kind, stock_code, isin_code)
+    DailySchedule(stock_kind=stock_kind, stock_code=stock_code, isin_code=isin_code, start_date='2023-03-01')
 
 
 # 獲取股票代碼
