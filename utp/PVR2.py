@@ -602,6 +602,144 @@ def plot_stock(stock_code, stock_name, df):
     plt.show()
 
 
+def detect_rule1(idx, row, df):
+    score = 0.0
+    trand = 0
+    final_score = 0
+
+    # === 超保守權重 ===
+    pvr = row['ampPvr']
+    rsi = row['RSI']
+    vol_ratio = row['5_V_MA'] / row['15_V_MA'] if row['15_V_MA'] != 0 else 1
+
+    # === 🔥 PVR 極端閾值（誤差率核心） ===
+    if pvr > 3.5:  # 2.8→3.5 極端放量
+        trand, label = 1, '強買'
+        final_score = 100
+    elif pvr < -3.0:  # -2.3→-3.0 極端縮量
+        trand, label = -1, '強賣'
+        final_score = -100
+    else:
+        # === 多重確認（3/4 條件才進場） ===
+        buy_signals = 0
+        sell_signals = 0
+
+        # 1. RSI 嚴格
+        if 25 <= rsi <= 38:
+            buy_signals += 1
+        elif rsi >= 72:
+            sell_signals += 1
+
+        # 2. 成交量 嚴格
+        if vol_ratio >= 2.2:
+            buy_signals += 1
+        elif vol_ratio <= 0.4:
+            sell_signals += 1
+
+        # 3. 均線 嚴格
+        if '10_MA' in row and row['10_MA'] != 0:
+            ma_diff = (row['close'] - row['10_MA']) / row['10_MA']
+            if ma_diff <= -0.08:
+                buy_signals += 1  # 8%以下
+            elif ma_diff >= 0.10:
+                sell_signals += 1  # 10%以上
+
+        # 4. MACD 確認
+        macd_strength = row['DIF'] - row['DEA']
+        if macd_strength >= 0.4:
+            buy_signals += 1
+        elif macd_strength <= -0.3:
+            sell_signals += 1
+
+        # === 3/4 確認才進場 ===
+        if buy_signals >= 3:
+            trand, label = 1, '買入'
+            final_score = 85
+        elif sell_signals >= 3:
+            trand, label = -1, '賣出'
+            final_score = -85
+        else:
+            trand, label = 0, '觀望'
+            final_score = 0
+
+    # === 寫入 ===
+    reason = f"★ {label} ({final_score:+.1f}%) | PVR={pvr:.2f}"
+    df.at[idx, 'trand'] = trand
+    df.at[idx, 'score'] = round(final_score, 2)
+    df.at[idx, 'reason'] = reason
+
+    return trand, final_score, reason
+
+
+def detect_rule1(idx, row, df):
+    score = 0.0
+    trand = 0
+    final_score = 0
+
+    # === 超保守權重 ===
+    pvr = row['ampPvr']
+    rsi = row['RSI']
+    vol_ratio = row['5_V_MA'] / row['15_V_MA'] if row['15_V_MA'] != 0 else 1
+
+    # === 🔥 PVR 極端閾值（誤差率核心） ===
+    if pvr > 3.5:  # 2.8→3.5 極端放量
+        trand, label = 1, '強買'
+        final_score = 100
+    elif pvr < -3.0:  # -2.3→-3.0 極端縮量
+        trand, label = -1, '強賣'
+        final_score = -100
+    else:
+        # === 多重確認（3/4 條件才進場） ===
+        buy_signals = 0
+        sell_signals = 0
+
+        # 1. RSI 嚴格
+        if 25 <= rsi <= 38:
+            buy_signals += 1
+        elif rsi >= 72:
+            sell_signals += 1
+
+        # 2. 成交量 嚴格
+        if vol_ratio >= 2.2:
+            buy_signals += 1
+        elif vol_ratio <= 0.4:
+            sell_signals += 1
+
+        # 3. 均線 嚴格
+        if '10_MA' in row and row['10_MA'] != 0:
+            ma_diff = (row['close'] - row['10_MA']) / row['10_MA']
+            if ma_diff <= -0.08:
+                buy_signals += 1  # 8%以下
+            elif ma_diff >= 0.10:
+                sell_signals += 1  # 10%以上
+
+        # 4. MACD 確認
+        macd_strength = row['DIF'] - row['DEA']
+        if macd_strength >= 0.4:
+            buy_signals += 1
+        elif macd_strength <= -0.3:
+            sell_signals += 1
+
+        # === 3/4 確認才進場 ===
+        if buy_signals >= 3:
+            trand, label = 1, '買入'
+            final_score = 85
+        elif sell_signals >= 3:
+            trand, label = -1, '賣出'
+            final_score = -85
+        else:
+            trand, label = 0, '觀望'
+            final_score = 0
+
+    # === 寫入 ===
+    reason = f"★ {label} ({final_score:+.1f}%) | PVR={pvr:.2f}"
+    df.at[idx, 'trand'] = trand
+    df.at[idx, 'score'] = round(final_score, 2)
+    df.at[idx, 'reason'] = reason
+
+    return trand, final_score, reason
+
+
 def detect_rule3(idx, row, df):
     """
     detect_rule3_v15 - 支援金叉/死叉型態 + 築底修正
