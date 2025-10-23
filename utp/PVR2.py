@@ -188,8 +188,8 @@ def detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5,
     df = df.copy()
 
     # 前一日收盤
-    df['prev_close'] = df['close'].shift(1)
-    df['diffClose'] = (df['close'] - df['prev_close']) / df['prev_close'] * 100
+    df['prevClose'] = df['close'].shift(1)
+    df['diffClose'] = (df['close'] - df['prevClose']) / df['prevClose'] * 100
 
     # 移動平均及成交量 z-score
     df['avgVolume'] = df['volume'].rolling(vol_window).mean()
@@ -197,43 +197,43 @@ def detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5,
     df['zScoreVolume'] = (df['volume'] - df['avgVolume']) / df['stdVolume']
 
     # 上下影線比例與實體比
-    df['實體長'] = abs(df['close'] - df['prev_close'])
-    df['上影線比'] = (df['high'] - df[['close', 'prev_close']].max(axis=1)) / df['實體長']
-    df['下影線比'] = (df[['close', 'prev_close']].min(axis=1) - df['low']) / df['實體長']
+    df['實體長'] = abs(df['close'] - df['prevClose'])
+    df['上影線比'] = (df['high'] - df[['close', 'prevClose']].max(axis=1)) / df['實體長']
+    df['下影線比'] = (df[['close', 'prevClose']].min(axis=1) - df['low']) / df['實體長']
 
     # 趨勢均線
-    df['MA_trend'] = df['close'].rolling(trend_window).mean()
-    df['MA_short'] = df['close'].rolling(5).mean()  # 短期均線過濾
+    df['MATrend'] = df['close'].rolling(trend_window).mean()
+    df['MAShort'] = df['close'].rolling(5).mean()  # 短期均線過濾
 
     # 前 cum_window 日累積漲幅
-    df['cum_pct'] = df['diffClose'].rolling(cum_window).sum()
+    df['cumPct'] = df['diffClose'].rolling(cum_window).sum()
 
     # ================= 拉高出貨 =================
-    df['score_up'] = 0
-    df['score_up'] += (df['diffClose'] > pct_thresh_up).astype(int)
-    df['score_up'] += (df['zScoreVolume'] > 0.5).astype(int)  # 成交量明顯放大
-    df['score_up'] += (df['上影線比'] > upper_shadow_thresh).astype(int)
-    df['score_up'] += (df['close'] > df['MA_short']).astype(int)  # 短期多頭濾網
+    df['scoreUp'] = 0
+    df['scoreUp'] += (df['diffClose'] > pct_thresh_up).astype(int)
+    df['scoreUp'] += (df['zScoreVolume'] > 0.5).astype(int)  # 成交量明顯放大
+    df['scoreUp'] += (df['上影線比'] > upper_shadow_thresh).astype(int)
+    df['scoreUp'] += (df['close'] > df['MAShort']).astype(int)  # 短期多頭濾網
     if rsi is not None:
-        df['score_up'] += (df[rsi] > 75).astype(int)
+        df['scoreUp'] += (df[rsi] > 75).astype(int)
     if macd is not None:
-        df['score_up'] += (df[macd] < 0).astype(int)  # 快線向下
-    df['拉高出貨'] = (df['score_up'] >= 3) & (df['close'] > df['MA_trend']) & (df['cum_pct'] > pct_thresh_up * 1.5)
+        df['scoreUp'] += (df[macd] < 0).astype(int)  # 快線向下
+    df['拉高出貨'] = (df['scoreUp'] >= 3) & (df['close'] > df['MATrend']) & (df['cumPct'] > pct_thresh_up * 1.5)
 
     # ================= 低位承接 =================
-    df['score_acc'] = 0
-    df['score_acc'] += ((df['diffClose'] >= 0) & (df['diffClose'] <= pct_thresh_acc)).astype(int)
-    df['score_acc'] += (df['zScoreVolume'] < 0.5).astype(int)  # 成交量適中或略低
-    df['score_acc'] += (df['下影線比'] > lower_shadow_thresh).astype(int)
-    df['score_acc'] += (df['close'] < df['MA_short']).astype(int)  # 短期弱勢濾網
+    df['scoreAcc'] = 0
+    df['scoreAcc'] += ((df['diffClose'] >= 0) & (df['diffClose'] <= pct_thresh_acc)).astype(int)
+    df['scoreAcc'] += (df['zScoreVolume'] < 0.5).astype(int)  # 成交量適中或略低
+    df['scoreAcc'] += (df['下影線比'] > lower_shadow_thresh).astype(int)
+    df['scoreAcc'] += (df['close'] < df['MAShort']).astype(int)  # 短期弱勢濾網
     if rsi is not None:
-        df['score_acc'] += (df[rsi] < 25).astype(int)
+        df['scoreAcc'] += (df[rsi] < 25).astype(int)
     if macd is not None:
-        df['score_acc'] += (df[macd] > 0).astype(int)  # 快線向上
-    df['低位承接'] = (df['score_acc'] >= 3) & (df['close'] < df['MA_trend']) & (df['cum_pct'] >= -pct_thresh_up)
+        df['scoreAcc'] += (df[macd] > 0).astype(int)  # 快線向上
+    df['低位承接'] = (df['scoreAcc'] >= 3) & (df['close'] < df['MATrend']) & (df['cumPct'] >= -pct_thresh_up)
 
     # 移除輔助欄位
-    df.drop(columns=['score_up', 'score_acc', 'prev_close', 'stdVolume', '實體長', 'MA_trend', 'MA_short', 'cum_pct'],
+    df.drop(columns=['scoreUp', 'scoreAcc', 'prevClose', 'stdVolume', '實體長', 'MATrend', 'MAShort', 'cumPct'],
             inplace=True)
 
     return df
