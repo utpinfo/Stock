@@ -434,39 +434,26 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
         hline = ax.axhline(y=yv, color='gray', linestyle='--', alpha=0.6)
         vline = ax.axvline(x=idx, color='gray', linestyle='--', alpha=0.6)
         ax._indicator_lines = [hline, vline]
-
-        # 價格圖上顯示文字
-        if ax == axes.get('close'):
-            press_top = df[(df['trand'] != 0) & (df['close'] > cur['close']) & (df['priceDate'] < cur['priceDate'])]
-            press_low = df[(df['trand'] != 0) & (df['close'] < cur['close']) & (df['priceDate'] < cur['priceDate'])]
-            press_top_price = press_top.iloc[-1]['close'] if not press_top.empty else 0
-            press_low_price = press_low.iloc[-1]['close'] if not press_low.empty else 0
-
-            msg = f"日期: {cur['priceDate']}\n"
-            if not pd.isna(cur.get('close')):
-                msg += f"價格: {cur.get('close', 0):.2f}, 量: {cur.get('volume', 0)}\n"
-            else:
-                msg += f"估價: {cur.get('estClose')}, 量: {cur.get('volume', 0)}\n"
-            msg += f"(壓力: {press_top_price:.2f} 支撐: {press_low_price:.2f})"
-
-            text = ax.text(1, 1, msg, ha='right', va='top', transform=ax.transAxes,
-                           color='red', fontsize=10, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
-            ax._indicator_texts = [text]
-
     # 更新標題
     if axes.get('close'):
+        press_top = df[(df['trand'] != 0) & (df['close'] > cur['close']) & (df['priceDate'] < cur['priceDate'])]
+        press_low = df[(df['trand'] != 0) & (df['close'] < cur['close']) & (df['priceDate'] < cur['priceDate'])]
+        press_top_price = press_top.iloc[-1]['close'] if not press_top.empty else 0
+        press_low_price = press_low.iloc[-1]['close'] if not press_low.empty else 0
         ax = axes['close']
-        msg = f"{stock_name}({stock_code})"
-        msg += f"\n指標價:{cur.get('avgTgtPrice')} 均價:{cur.get('avg_price')}"
+        msg = ''
         if not pd.isna(cur.get('close')):
-            msg += f"\n價:{cur.get('close')} 量:{cur.get('volume')}"
+            msg += f"價:{cur.get('close')}  量:{cur.get('volume'):.0f}"
+        if not pd.isna(cur.get('avgTgtPrice')):
+            msg += f"\n指標價:{cur.get('avgTgtPrice').round(decimal_place)}"
         else:
-            msg += f"\n估價:{cur.get('estClose')} 量:{cur.get('volume')}"
+            msg += f"\n估價:{cur.get('estClose').round(decimal_place)}"
+        if not pd.isna(cur.get('10_MA')):
+            msg += f"\n均價:{cur.get('10_MA').round(decimal_place)}"
         msg += f"\n(壓:{press_top_price} 支:{press_low_price})"
         if not pd.isna(cur.get('reason')):
             msg += f"\n{cur.get('reason')}"
-
-        ax.set_title(msg)
+        ax.set_title(msg, loc='left', color='red', fontsize=10)
 
     event.canvas.draw_idle()
 
@@ -497,6 +484,22 @@ def plot_stock(stock_code, stock_name, df):
 
     axes = {}
     for i, p in enumerate(panels):
+        if i == 1:
+            msg = f"{stock_name}({stock_code})"
+            ax.text(
+                1, 1, msg,
+                transform=ax.transAxes,
+                verticalalignment='top',
+                horizontalalignment='right',
+                fontsize=16,
+                color='white',  # 文字顏色
+                bbox=dict(
+                    facecolor='black',  # 背景色
+                    alpha=0.6,  # 透明度 (0～1)
+                    boxstyle='round,pad=0.3',  # 圓角 + 內距
+                    edgecolor='none'  # 去邊框
+                )
+            )
         ax = fig.add_subplot(gs[i], sharex=axes[panels[0]] if i > 0 else None)
         axes[p] = ax
         cfg = PANEL_CONFIG[p]
@@ -585,6 +588,7 @@ def plot_stock(stock_code, stock_name, df):
     plt.subplots_adjust(top=0.9, bottom=0.15, left=0.07, right=0.95)
     # 只顯示有效分析的日期 (分析天數 - MACD的30天)
     axes[panels[-1]].set_xlim(df.index[-(analyse_days - 30)], df.index[-1])
+
     # 3️⃣ 綁定滑鼠事件（這裡必須用 axes 字典）
     fig.canvas.mpl_connect(
         'motion_notify_event',
@@ -784,7 +788,7 @@ for master in codes:
     if not details:
         continue
     df = pd.DataFrame(details)
-    df['volume'] = df['volume'] / 1000
+    df['volume'] = (df['volume'] / 1000).round()
     # ===================== 計算指標 =====================
     # 計算RSI
     df['RSI'] = ta.rsx(df['close'], length=14)  # 指定window=14
