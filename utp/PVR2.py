@@ -164,12 +164,8 @@ def calc_ma(df):
     for p in [5, 10, 15]:
         df[f'{p}_MA'] = df['close'].rolling(p).mean()
         df[f'{p}_V_MA'] = df['volume'].rolling(p).mean()
-        df[f'{p}_E_MA'] = df['diffPvr'].abs().rolling(p).mean()
     return df
 
-
-import numpy as np
-import pandas as pd
 
 # ===================== 異常波動 =====================
 def calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2):
@@ -306,35 +302,58 @@ def detect_trade_signals(df, pct_thresh_up=2.2, pct_thresh_acc=2.0, vol_window=5
 
 # ==================== 預估函式區 ====================
 def exp_func(x, a, b):
-    """指數擬合公式 y = a * b^x"""
+    """指數函數 y = a * b^x"""
     return a * (b ** x)
 
 
-def predict_next(df, days=7):
-    """根據歷史 close，自動預測未來 N 天"""
+def add_growth_and_forecast(df, days_ahead=7):
+    """
+    計算日增長率、週增長率、累積增長，並預測未來 N 天。
+
+    參數:
+    df : pd.DataFrame
+        包含 'close' 與 'priceDate' 的資料框
+    days_ahead : int
+        要預測的天數
+
+    返回:
+    pd.DataFrame
+        原始資料 + 計算欄位 + 預測資料
+    """
+
+    df = df.copy()
+
+    # 計算增長率
+    df['日增長率'] = df['close'].pct_change() * 100
+    df['週增長率'] = df['close'].pct_change(periods=7) * 100
+    df['累積增長'] = (1 + df['日增長率'] / 100).cumprod() * 100 - 100
+    df['日增長率_%'] = df['日增長率'].fillna(0).round(1).astype(str) + '%'
+    df['指數增長率'] = df['close'] / df['close'].shift(1)  # T/T-1
+
+    # 設置預測價格欄位
+    df['estClose'] = df['close']
+
+    # 指數擬合預測未來 N 天
     x_data = np.arange(len(df))
     y_data = df['close'].values
-
-    # 指數擬合
     popt, _ = curve_fit(exp_func, x_data, y_data, p0=(1000, 1.02))
     a, b = popt
 
-    # 預測未來 days 天
-    future_x = np.arange(len(df), len(df) + days)
+    future_x = np.arange(len(df), len(df) + days_ahead)
     future_y = exp_func(future_x, a, b)
-    future_dates = pd.date_range(df['priceDate'].iloc[-1] + pd.Timedelta(days=1), periods=days, freq='D').date
 
-    result = pd.DataFrame({
-        '日期': future_dates,
+    future_dates = pd.date_range(df['priceDate'].iloc[-1] + pd.Timedelta(days=1),
+                                 periods=days_ahead, freq='D').date
+
+    predictions = pd.DataFrame({
+        'priceDate': future_dates,
         'estClose': future_y.round(0).astype(int)
     })
-    """
-    print(f"=== 指數趨勢線方程式 ===")
-    print(f"y = {a:.0f} × {b:.4f}^x")
-    print("\n=== 未來預測 ===")
-    print(result, "\n")
-    """
-    return result
+
+    # 合併原始資料與預測資料
+    df = pd.concat([df, predictions], ignore_index=True)
+
+    return df
 
 
 # 定义鼠标移动事件处理程序
@@ -740,15 +759,13 @@ for master in codes:
     print(details)
     if not details:
         continue
-
     df = pd.DataFrame(details)
     df['volume'] = df['volume'] / 1000
-    df = calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2)  # 異常主力
-    df['avgPrice'] = df['close'].expanding().mean().round(decimal_place)
-    df['avgVolume'] = df['volume'].expanding().mean().round(decimal_place)
+    # ===================== 計算指標 =====================
+    # 計算RSI
     df['RSI'] = ta.rsx(df['close'], length=14)  # 指定window=14
 
-    # 計算 KDJ
+    # 計算KDJ
     kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
     K = kd['STOCHk_9_3_3'].round(decimal_place)
     D = kd['STOCHd_9_3_3'].round(decimal_place)
@@ -765,7 +782,6 @@ for master in codes:
     df['DIF'] = macd['MACD_12_26_9'].fillna(0)
     df['DEA'] = macd['MACDs_12_26_9'].fillna(0)
     df['MACD'] = macd['MACDh_12_26_9'].fillna(0)
-    # df['DIF'], df['DEA'], df['MACD'] = calc_macd(df['close'])
 
     # 加權平均求MACD趨勢(3日趨勢)
     weights = np.arange(1, 4)  # [1,2,3,4,5]，越近越重
@@ -786,29 +802,22 @@ for master in codes:
     # TSI > 0 → 多方強勢，可考慮買入
     tsi_df = ta.tsi(df['close'], r=2, s=2)
     df['TSI'] = tsi_df.iloc[:, 0]  # 取第一欄
-
     # 計算均線
     df = calc_ma(df)
-    # 拉高出貨 + 低位承接檢測
-    df = detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5, rsi='RSI', macd='MACD')
 
-    # 計算每日增長率
-    df['日增長率'] = df['close'].pct_change() * 100
-    df['週增長率'] = df['close'].pct_change(periods=7) * 100
-    df['累積增長'] = (1 + df['日增長率'] / 100).cumprod() * 100 - 100
-    df['日增長率_%'] = df['日增長率'].fillna(0).round(1).astype(str) + '%'
-    df['指數增長率'] = df['close'] / df['close'].shift(1)  # T/T-1
-    # print("=== 每日增長率結果 ===")
-    # print(df[['priceDate', 'close', '日增長率_%', '指數增長率']].round(3), "\n")
-    # 預測未來 7 天
-    predictions = predict_next(df, days=7)
-    df['estClose'] = df['close']
-    df = pd.concat([df, predictions.rename(columns={'日期': 'priceDate'})], ignore_index=True)
-
-    # ===================== 判斷買賣時機 =====================
+    # ===================== 推估走勢 =====================
+    # 1. 檢測異常波動
+    df = calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2)  # 1. 異常主力
+    # 2. 檢測(出貨/承接)
+    df = detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5, rsi='RSI',
+                              macd='MACD')  # 2. detect_trade_signals
+    # 3. 檢測買賣時機
     for idx, row in df.iterrows():
         detect_rule3(idx, row, df)
+    # 4. 預測未來 7 天
+    df = add_growth_and_forecast(df, days_ahead=7)
 
+    # ===================== 圖像輸出 =====================
     if display_df == 1:
         print(tabulate(df, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
     elif display_df == 2:
@@ -816,7 +825,6 @@ for master in codes:
         print(
             tabulate(df_filtered, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
     if display_matplot:
-        # plot_stock(stock_code, stock_name, df, df['avgTgtPrice'].iloc[-1], df['avgPrice'].iloc[-1])
         plot_stock(stock_code, stock_name, df)
 print("指標股票")
 for stock_code in rec_stocks:
