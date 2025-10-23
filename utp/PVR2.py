@@ -169,72 +169,91 @@ def calc_ma(df):
 
 
 # ===================== 拉高出貨 + 低位承接檢測 =====================
-def detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5,
-                         upper_shadow_thresh=0.4, lower_shadow_thresh=0.25,
-                         rsi=None, macd=None, trend_window=20, cum_window=3):
+import numpy as np
+import pandas as pd
+
+
+def detect_trade_signals(df, pct_thresh_up=2.2, pct_thresh_acc=2.0, vol_window=5,
+                         upper_shadow_thresh=0.65, lower_shadow_thresh=0.30,
+                         rsi=None, macd=None, trend_window=20, cum_window=5):
     """
-    改良版：降低假訊號的拉高出貨與低位承接判斷
-    df: DataFrame 必須包含 ['close','high','low','volume']
-    pct_thresh_up: 漲幅門檻
-    pct_thresh_acc: 漲幅上限
-    vol_window: 成交量平均期
-    upper_shadow_thresh: 長上影線比例
-    lower_shadow_thresh: 長下影線比例
-    rsi: 可選 RSI 欄位名稱
-    macd: 可選 MACD 快線欄位名稱
-    trend_window: 趨勢判斷均線期
-    cum_window: 前幾日累積漲跌過濾
+    detect_trade_signals_v3_6
+    智能平衡 + 信號強度版：
+    - 維持 v3.5 準確邏輯
+    - 新增 SignalStrength 欄位 (0~10)
     """
     df = df.copy()
-
-    # 前一日收盤
     df['prevClose'] = df['close'].shift(1)
     df['diffClose'] = (df['close'] - df['prevClose']) / df['prevClose'] * 100
 
-    # 移動平均及成交量 z-score
+    # 成交量
     df['avgVolume'] = df['volume'].rolling(vol_window).mean()
     df['stdVolume'] = df['volume'].rolling(vol_window).std()
     df['zScoreVolume'] = (df['volume'] - df['avgVolume']) / df['stdVolume']
 
-    # 上下影線比例與實體比
+    # 影線比例
     df['實體長'] = abs(df['close'] - df['prevClose'])
-    df['上影線比'] = (df['high'] - df[['close', 'prevClose']].max(axis=1)) / df['實體長']
-    df['下影線比'] = (df[['close', 'prevClose']].min(axis=1) - df['low']) / df['實體長']
+    df['上影線比'] = np.where(df['實體長'] > 0,
+                              (df['high'] - df[['close', 'prevClose']].max(axis=1)) / df['實體長'], 0)
+    df['下影線比'] = np.where(df['實體長'] > 0,
+                              (df[['close', 'prevClose']].min(axis=1) - df['low']) / df['實體長'], 0)
 
-    # 趨勢均線
+    # 均線與趨勢
     df['MATrend'] = df['close'].rolling(trend_window).mean()
-    df['MAShort'] = df['close'].rolling(5).mean()  # 短期均線過濾
-
-    # 前 cum_window 日累積漲幅
+    df['priceVsTrend'] = (df['close'] - df['MATrend']) / df['MATrend'] * 100
     df['cumPct'] = df['diffClose'].rolling(cum_window).sum()
 
-    # ================= 拉高出貨 =================
+    # -------- 拉高出貨 --------
     df['scoreUp'] = 0
-    df['scoreUp'] += (df['diffClose'] > pct_thresh_up).astype(int)
-    df['scoreUp'] += (df['zScoreVolume'] > 0.5).astype(int)  # 成交量明顯放大
-    df['scoreUp'] += (df['上影線比'] > upper_shadow_thresh).astype(int)
-    df['scoreUp'] += (df['close'] > df['MAShort']).astype(int)  # 短期多頭濾網
-    if rsi is not None:
-        df['scoreUp'] += (df[rsi] > 75).astype(int)
-    if macd is not None:
-        df['scoreUp'] += (df[macd] < 0).astype(int)  # 快線向下
-    df['拉高出貨'] = (df['scoreUp'] >= 3) & (df['close'] > df['MATrend']) & (df['cumPct'] > pct_thresh_up * 1.5)
+    df['scoreUp'] += (df['diffClose'] > pct_thresh_up) * 3
+    df['scoreUp'] += (df['zScoreVolume'] > 1.3) * 2
+    df['scoreUp'] += (df['上影線比'] > upper_shadow_thresh) * 1.5
+    df['scoreUp'] += (df['priceVsTrend'] > 1.5) * 1
 
-    # ================= 低位承接 =================
+    if rsi is not None:
+        df['scoreUp'] += (df[rsi] > 75) * 1
+    if macd is not None:
+        df['scoreUp'] += (df[macd] < -0.3) * 0.5
+
+    df['拉高出貨'] = (df['scoreUp'] >= 5.5) & \
+                     (df['close'] > df['MATrend'] * 1.015) & \
+                     (df['cumPct'] > 3.5)
+
+    # -------- 低位承接 --------
     df['scoreAcc'] = 0
-    df['scoreAcc'] += ((df['diffClose'] >= 0) & (df['diffClose'] <= pct_thresh_acc)).astype(int)
-    df['scoreAcc'] += (df['zScoreVolume'] < 0.5).astype(int)  # 成交量適中或略低
-    df['scoreAcc'] += (df['下影線比'] > lower_shadow_thresh).astype(int)
-    df['scoreAcc'] += (df['close'] < df['MAShort']).astype(int)  # 短期弱勢濾網
-    if rsi is not None:
-        df['scoreAcc'] += (df[rsi] < 25).astype(int)
-    if macd is not None:
-        df['scoreAcc'] += (df[macd] > 0).astype(int)  # 快線向上
-    df['低位承接'] = (df['scoreAcc'] >= 3) & (df['close'] < df['MATrend']) & (df['cumPct'] >= -pct_thresh_up)
+    df['scoreAcc'] += ((-1 <= df['diffClose']) & (df['diffClose'] <= pct_thresh_acc)) * 2.5
+    df['scoreAcc'] += (df['zScoreVolume'] > -1.0) * 1.5
+    df['scoreAcc'] += (df['下影線比'] > lower_shadow_thresh) * 2
+    df['scoreAcc'] += (df['priceVsTrend'] < -1.5) * 1
 
-    # 移除輔助欄位
-    df.drop(columns=['scoreUp', 'scoreAcc', 'prevClose', 'stdVolume', '實體長', 'MATrend', 'MAShort', 'cumPct'],
-            inplace=True)
+    if rsi is not None:
+        df['scoreAcc'] += (df[rsi] < 25) * 1
+    if macd is not None:
+        df['scoreAcc'] += (df[macd] > 0.3) * 0.5
+
+    # 無量反轉補強
+    df['scoreAcc'] += ((df['zScoreVolume'] < -1.0) & (df['diffClose'] > 0)) * 1.5
+
+    df['低位承接'] = (df['scoreAcc'] >= 5.5) & \
+                     (df['close'] < df['MATrend'] * 0.985) & \
+                     (df['cumPct'] >= -3.5)
+
+    # -------- 信號強度 (0~10) --------
+    df['SignalStrength'] = np.select(
+        [
+            df['拉高出貨'],
+            df['低位承接']
+        ],
+        [
+            np.clip(df['scoreUp'] * 1.5, 0, 10),  # 拉高出貨強度
+            np.clip(df['scoreAcc'] * 1.5, 0, 10)  # 低位承接強度
+        ],
+        default=0
+    )
+
+    # -------- 清理 --------
+    df.drop(columns=['scoreUp', 'scoreAcc', 'prevClose', 'stdVolume', '實體長',
+                     'MATrend', 'cumPct', 'priceVsTrend', 'avgVolume'], inplace=True)
 
     return df
 
