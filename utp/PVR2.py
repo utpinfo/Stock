@@ -19,10 +19,10 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-stock_code = ['2301']
-codes = MySQL.get_stock(stock_status=90, stock_code=[])  # 股票列表
+stock_code = []
+codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
 sns.set_theme(style="whitegrid")
-display_matplot = 0  # 是否顯示圖表
+display_matplot = 1  # 是否顯示圖表
 display_df = 1  # 是否顯示詳細數據 (0.不顯示 1.全部顯示 2.只顯示趨勢)
 rec_days = 3  # 最近幾日檢查
 fut_days = 7  # 推估日數
@@ -789,92 +789,99 @@ def detect_rule3(idx, row, df):
 
 
 # ===================== 主流程 =====================
-for master in codes:
-    stock_code = master['stock_code']
-    stock_name = master['stock_name']
-    details = MySQL.get_price(stock_code, analyse_days, 'asc')
-    details = humps.camelize(details)
-    print(details)
-    if not details:
-        continue
-    df = pd.DataFrame(details)
-    df['volume'] = (df['volume'] / 1000).round()
-    # ===================== 計算指標 =====================
-    # 計算RSI
-    df['RSI'] = ta.rsx(df['close'], length=14)  # 指定window=14
+def main():
+    for master in codes:
+        stock_code = master['stock_code']
+        stock_name = master['stock_name']
+        details = MySQL.get_price(stock_code, analyse_days, 'asc')
+        details = humps.camelize(details)
+        print(details)
+        if not details:
+            continue
+        df = pd.DataFrame(details)
+        df['volume'] = (df['volume'] / 1000).round()
+        # ===================== 計算指標 =====================
+        # 計算RSI
+        df['RSI'] = ta.rsx(df['close'], length=14)  # 指定window=14
 
-    # 計算KDJ
-    kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
-    K = kd['STOCHk_9_3_3'].round(decimal_place)
-    D = kd['STOCHd_9_3_3'].round(decimal_place)
-    J = (kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']).round(decimal_place)
-    df['KDJ'] = list(zip(K, D, J))
-    df['J'] = J
-    df['prevKDJ'] = df['KDJ'].shift(1)
+        # 計算KDJ
+        kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
+        K = kd['STOCHk_9_3_3'].round(decimal_place)
+        D = kd['STOCHd_9_3_3'].round(decimal_place)
+        J = (kd['STOCHk_9_3_3'] - 2 * kd['STOCHd_9_3_3']).round(decimal_place)
+        df['KDJ'] = list(zip(K, D, J))
+        df['J'] = J
+        df['prevKDJ'] = df['KDJ'].shift(1)
 
-    # 計算MACD (含DIF/DEA)
-    if len(df['close']) < 30:  # MACD慢線需要至少26個數值
-        print(f"股票:{stock_code} 價格資料太少，無法計算 MACD")
-        continue
-    macd = ta.macd(df['close'])
-    df['DIF'] = macd['MACD_12_26_9'].fillna(0)
-    df['DEA'] = macd['MACDs_12_26_9'].fillna(0)
-    df['MACD'] = macd['MACDh_12_26_9'].fillna(0)
+        # 計算MACD (含DIF/DEA)
+        if len(df['close']) < 30:  # MACD慢線需要至少26個數值
+            print(f"股票:{stock_code} 價格資料太少，無法計算 MACD")
+            continue
+        macd = ta.macd(df['close'])
+        df['DIF'] = macd['MACD_12_26_9'].fillna(0)
+        df['DEA'] = macd['MACDs_12_26_9'].fillna(0)
+        df['MACD'] = macd['MACDh_12_26_9'].fillna(0)
 
-    # 加權平均求MACD趨勢(3日趨勢)
-    weights = np.arange(1, 4)  # [1,2,3,4,5]，越近越重
-    df['MACD_5wma'] = df['MACD'].rolling(3).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
-    df['MACD_TREAD'] = np.where(df['MACD'] > df['MACD_5wma'], 1, np.where(df['MACD'] < df['MACD_5wma'], -1, 0))  # 判斷趨勢
-    df.drop(columns=['MACD_5wma'], inplace=True)  # 刪掉中間欄位（可選）
+        # 加權平均求MACD趨勢(3日趨勢)
+        weights = np.arange(1, 4)  # [1,2,3,4,5]，越近越重
+        df['MACD_5wma'] = df['MACD'].rolling(3).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+        df['MACD_TREAD'] = np.where(df['MACD'] > df['MACD_5wma'], 1,
+                                    np.where(df['MACD'] < df['MACD_5wma'], -1, 0))  # 判斷趨勢
+        df.drop(columns=['MACD_5wma'], inplace=True)  # 刪掉中間欄位（可選）
 
-    # 偵測金叉、死叉
-    df['MACD_SIG'] = 0.0
-    df.loc[(df['DIF'].shift(1) < df['DEA'].shift(1)) & (df['DIF'] > df['DEA']), 'MACD_SIG'] = 1  # 金叉
-    df.loc[(df['DIF'].shift(1) > df['DEA'].shift(1)) & (df['DIF'] < df['DEA']), 'MACD_SIG'] = -1  # 死叉
-    # 接近交叉（預警）
-    diff = df['DIF'] - df['DEA']
-    df.loc[(diff.between(-threshold_macd, 0)) & (df['DIF'] < df['DEA']), 'MACD_SIG'] = 0.5  # 接近金叉
-    df.loc[(diff.between(0, threshold_macd)) & (df['DIF'] > df['DEA']), 'MACD_SIG'] = -0.5  # 接近死叉
+        # 偵測金叉、死叉
+        df['MACD_SIG'] = 0.0
+        df.loc[(df['DIF'].shift(1) < df['DEA'].shift(1)) & (df['DIF'] > df['DEA']), 'MACD_SIG'] = 1  # 金叉
+        df.loc[(df['DIF'].shift(1) > df['DEA'].shift(1)) & (df['DIF'] < df['DEA']), 'MACD_SIG'] = -1  # 死叉
+        # 接近交叉（預警）
+        diff = df['DIF'] - df['DEA']
+        df.loc[(diff.between(-threshold_macd, 0)) & (df['DIF'] < df['DEA']), 'MACD_SIG'] = 0.5  # 接近金叉
+        df.loc[(diff.between(0, threshold_macd)) & (df['DIF'] > df['DEA']), 'MACD_SIG'] = -0.5  # 接近死叉
 
-    df['OBV'] = ta.obv(close=df['close'], volume=df['volume'])
-    # TSI > 0 → 多方強勢，可考慮買入
-    tsi_df = ta.tsi(df['close'], r=2, s=2)
-    df['TSI'] = tsi_df.iloc[:, 0]  # 取第一欄
-    # 計算均線
-    df = calc_ma(df)
+        df['OBV'] = ta.obv(close=df['close'], volume=df['volume'])
+        # TSI > 0 → 多方強勢，可考慮買入
+        tsi_df = ta.tsi(df['close'], r=2, s=2)
+        df['TSI'] = tsi_df.iloc[:, 0]  # 取第一欄
+        # 計算均線
+        df = calc_ma(df)
 
-    # ===================== 推估走勢 =====================
-    # 1. 檢測異常波動
-    df = calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2)  # 1. 異常主力
-    # 2. 檢測(出貨/承接)
-    df = detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5, rsi='RSI',
-                              macd='MACD')  # 2. detect_trade_signals
-    # 3. 檢測買賣時機
-    for idx, row in df.iterrows():
-        detect_rule3(idx, row, df)
-    # 4. 預測未來 7 天
-    df = add_growth_and_forecast(df, days_ahead=fut_days)
+        # ===================== 推估走勢 =====================
+        # 1. 檢測異常波動
+        df = calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2)  # 1. 異常主力
+        # 2. 檢測(出貨/承接)
+        df = detect_trade_signals(df, pct_thresh_up=2, pct_thresh_acc=2, vol_window=5, rsi='RSI',
+                                  macd='MACD')  # 2. detect_trade_signals
+        # 3. 檢測買賣時機
+        for idx, row in df.iterrows():
+            detect_rule3(idx, row, df)
+        # 4. 預測未來 7 天
+        df = add_growth_and_forecast(df, days_ahead=fut_days)
 
-    ratio = df['estClose_adj'].iloc[-1] / df['close'].iloc[-fut_days - 1]
-    reason = f"{fut_days}日後推估價 / 現價比例: {ratio:.4f}"
-    # print(reason)
-    if ratio > 1.1:
-        stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
-        if not stock_exists:
-            rec_stocks.append(
-                {'stock_code': stock_code, 'stock_name': stock_name, 'reason': reason})
-    # ===================== 圖像輸出 =====================
-    if display_df == 1:
-        print(tabulate(df, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
-    elif display_df == 2:
-        df_filtered = df[df['trand'].notna()]  # 選出 trand 不為 NaN 的列
-        print(
-            tabulate(df_filtered, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
-    if display_matplot:
-        plot_stock(stock_code, stock_name, df)
+        ratio = df['estClose_adj'].iloc[-1] / df['close'].iloc[-fut_days - 1]
+        reason = f"{fut_days}日後推估價 / 現價比例: {ratio:.4f}"
+        # print(reason)
+        if ratio > 1.1:
+            stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
+            if not stock_exists:
+                rec_stocks.append(
+                    {'stock_code': stock_code, 'stock_name': stock_name, 'reason': reason})
+        # ===================== 圖像輸出 =====================
+        if display_df == 1:
+            print(tabulate(df, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
+        elif display_df == 2:
+            df_filtered = df[df['trand'].notna()]  # 選出 trand 不為 NaN 的列
+            print(
+                tabulate(df_filtered, headers='keys', tablefmt='simple', showindex=False, stralign='left',
+                         numalign='left'))
+        if display_matplot:
+            plot_stock(stock_code, stock_name, df)
 
-print("**************** 推薦股票 ********************")
-rec_stock = []
-for row in rec_stocks:
-    rec_stock.append([row['stock_code'], row['stock_name'], row['reason']])
-print(tabulate(rec_stock, headers=['Stock Code', 'Stock Name', 'Reason'], tablefmt='grid'))
+    print("**************** 推薦股票 ********************")
+    rec_stock = []
+    for row in rec_stocks:
+        rec_stock.append([row['stock_code'], row['stock_name'], row['reason']])
+    print(tabulate(rec_stock, headers=['Stock Code', 'Stock Name', 'Reason'], tablefmt='grid'))
+
+
+if __name__ == "__main__":
+    main()
