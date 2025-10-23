@@ -168,6 +168,55 @@ def calc_ma(df):
     return df
 
 
+import numpy as np
+import pandas as pd
+
+
+def calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2):
+    """
+    計算異常主力指標（高效 vectorized 版本）：
+    - diffPvr: 價量敏感度（差價量比）
+    - avgPvr: 過去 window 日絕對差價量比平均（中位+均值混合）
+    - ampPvr: 異常放大倍率
+    - tgtPrice: 異常價指標
+    - avgTgtPrice: 指標平均價格
+
+    參數:
+        df: pd.DataFrame，需包含 ['close', 'volume']
+        window: int, 滾動計算天數
+        min_periods: int, 滾動最小天數
+        decimal_place: int, 平均指標價格小數位
+    """
+    eps = 1e-6
+
+    # 計算每日差價與差量
+    df['diffPrice'] = df['close'].diff().fillna(0)
+    df['diffVolume'] = df['volume'].diff().fillna(0)
+
+    # 1️⃣ 差價量比
+    df['diffPvr'] = np.where(
+        df['diffVolume'].abs() > eps,
+        df['diffPrice'] / (df['diffVolume'] / 10000),
+        0
+    )
+
+    # 2️⃣ 平滑基準：rolling mean + median（vectorized，高效）
+    rolling_mean = df['diffPvr'].abs().rolling(window=window, min_periods=min_periods).mean()
+    rolling_median = df['diffPvr'].abs().rolling(window=window, min_periods=min_periods).median()
+    df['avgPvr'] = ((rolling_mean + rolling_median) / 2).bfill()
+
+    # 3️⃣ 異常放大倍率
+    df['ampPvr'] = (df['diffPvr'] / (df['avgPvr'] + eps)).replace([np.inf, -np.inf], 0).fillna(0)
+
+    # 4️⃣ 指標價格
+    df['tgtPrice'] = np.where(abs(df['diffPvr']) > abs(df['avgPvr']), df['close'].fillna(0), 0)
+
+    # 5️⃣ 平均指標價格
+    df['avgTgtPrice'] = df['tgtPrice'].where(df['tgtPrice'] > 0).expanding().mean().round(decimal_place)
+    df.drop(columns=['tgtPrice'], inplace=True)  # 刪掉中間欄位（可選）
+    return df
+
+
 # ===================== 拉高出貨 + 低位承接檢測 =====================
 def detect_trade_signals(df, pct_thresh_up=2.2, pct_thresh_acc=2.0, vol_window=5,
                          upper_shadow_thresh=0.65, lower_shadow_thresh=0.30,
@@ -216,33 +265,34 @@ def detect_trade_signals(df, pct_thresh_up=2.2, pct_thresh_acc=2.0, vol_window=5
                      (df['cumPct'] > 3.5)
 
     # -------- 低位承接 --------
+    # -------- 低位承接 (放寬版) --------
     df['scoreAcc'] = 0
-    df['scoreAcc'] += ((-1 <= df['diffClose']) & (df['diffClose'] <= pct_thresh_acc)) * 2.5
-    df['scoreAcc'] += (df['zScoreVolume'] > -1.0) * 1.5
-    df['scoreAcc'] += (df['下影線比'] > lower_shadow_thresh) * 2
-    df['scoreAcc'] += (df['priceVsTrend'] < -1.5) * 1
+    df['scoreAcc'] += ((-1.5 <= df['diffClose']) & (df['diffClose'] <= pct_thresh_acc + 0.5)) * 2.5
+    df['scoreAcc'] += (df['zScoreVolume'] > -1.5) * 1.5
+    df['scoreAcc'] += (df['下影線比'] > lower_shadow_thresh * 0.85) * 2
+    df['scoreAcc'] += (df['priceVsTrend'] < -1.0) * 1
 
     if rsi is not None:
-        df['scoreAcc'] += (df[rsi] < 25) * 1
+        df['scoreAcc'] += (df[rsi] < 30) * 1
     if macd is not None:
-        df['scoreAcc'] += (df[macd] > 0.3) * 0.5
+        df['scoreAcc'] += (df[macd] > 0.2) * 0.5
 
-    # 無量反轉補強
+    # 無量反轉補強 (保留)
     df['scoreAcc'] += ((df['zScoreVolume'] < -1.0) & (df['diffClose'] > 0)) * 1.5
 
-    df['低位承接'] = (df['scoreAcc'] >= 5.5) & \
-                     (df['close'] < df['MATrend'] * 0.985) & \
-                     (df['cumPct'] >= -3.5)
+    df['低位承接'] = (df['scoreAcc'] >= 5.0) & \
+                     (df['close'] < df['MATrend'] * 0.99) & \
+                     (df['cumPct'] >= -4)
 
-    # -------- 信號強度 (0~10) --------
+    # 信號強度放寬 (平滑化)
     df['SignalStrength'] = np.select(
         [
             df['拉高出貨'],
             df['低位承接']
         ],
         [
-            np.clip(df['scoreUp'] * 1.5, 0, 10),  # 拉高出貨強度
-            np.clip(df['scoreAcc'] * 1.5, 0, 10)  # 低位承接強度
+            np.clip(df['scoreUp'] * 1.3, 0, 10),
+            np.clip(df['scoreAcc'] * 1.3, 0, 10)
         ],
         default=0
     )
@@ -364,7 +414,7 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
     if axes.get('close'):
         ax = axes['close']
         msg = f"{stock_name}({stock_code})"
-        msg += f"\n指標價:{cur.get('est_price')} 均價:{cur.get('avg_price')}"
+        msg += f"\n指標價:{cur.get('avgTgtPrice')} 均價:{cur.get('avg_price')}"
         if not pd.isna(cur.get('close')):
             msg += f"\n價:{cur.get('close')} 量:{cur.get('volume')}"
         else:
@@ -693,17 +743,7 @@ for master in codes:
 
     df = pd.DataFrame(details)
     df['volume'] = df['volume'] / 1000
-    df['diffPrice'] = df['close'].diff().fillna(0)
-    df['diffVolume'] = df['volume'].diff().fillna(0)
-    # 異常主力
-    df['diffPvr'] = np.where(df['diffVolume'] != 0, df['diffPrice'] / (df['diffVolume'] / 10000), 0)  # 差價量比
-    df['avgPvr'] = df['diffPvr'].abs().rolling(window=10, min_periods=1).mean()  # 近10日平均差價量比
-    # df['ampPvr'] = (df['diffPvr'] / df['avgPvr']).fillna(0).round(decimal_place)
-    df['ampPvr'] = (
-        (df['diffPvr'] / df['avgPvr']).replace([np.inf, -np.inf], 0).fillna(0)
-    ).clip(-5, 5).round(decimal_place)
-    df['tgtPrice'] = np.where(abs(df['diffPvr']) > abs(df['avgPvr']), df['close'].fillna(0), 0)  # 指標價格
-    df['estPrice'] = df['tgtPrice'].where(df['tgtPrice'] > 0).expanding().mean().round(decimal_place)  # 平均指標價格
+    df = calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2)  # 異常主力
     df['avgPrice'] = df['close'].expanding().mean().round(decimal_place)
     df['avgVolume'] = df['volume'].expanding().mean().round(decimal_place)
     df['RSI'] = ta.rsx(df['close'], length=14)  # 指定window=14
@@ -776,7 +816,7 @@ for master in codes:
         print(
             tabulate(df_filtered, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
     if display_matplot:
-        # plot_stock(stock_code, stock_name, df, df['estPrice'].iloc[-1], df['avgPrice'].iloc[-1])
+        # plot_stock(stock_code, stock_name, df, df['avgTgtPrice'].iloc[-1], df['avgPrice'].iloc[-1])
         plot_stock(stock_code, stock_name, df)
 print("指標股票")
 for stock_code in rec_stocks:
