@@ -19,7 +19,7 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-stock_code = ['3324']
+stock_code = ['2301']
 codes = MySQL.get_stock(stock_status=90, stock_code=[])  # 股票列表
 sns.set_theme(style="whitegrid")
 display_matplot = 1  # 是否顯示圖表
@@ -307,52 +307,77 @@ def exp_func(x, a, b):
 
 
 def add_growth_and_forecast(df, days_ahead=7):
-    """
-    計算日增長率、週增長率、累積增長，並預測未來 N 天。
-
-    參數:
-    df : pd.DataFrame
-        包含 'close' 與 'priceDate' 的資料框
-    days_ahead : int
-        要預測的天數
-
-    返回:
-    pd.DataFrame
-        原始資料 + 計算欄位 + 預測資料
-    """
-
     df = df.copy()
 
-    # 計算增長率
-    df['日增長率'] = df['close'].pct_change() * 100
-    df['週增長率'] = df['close'].pct_change(periods=7) * 100
-    df['累積增長'] = (1 + df['日增長率'] / 100).cumprod() * 100 - 100
-    df['日增長率_%'] = df['日增長率'].fillna(0).round(1).astype(str) + '%'
-    df['指數增長率'] = df['close'] / df['close'].shift(1)  # T/T-1
+    # -----------------------
+    # 1️⃣ 計算日增長率、週增長率、累積增長
+    # -----------------------
+    df['daily_growth'] = df['close'].pct_change() * 100
+    df['weekly_growth'] = df['close'].pct_change(5) * 100
+    df['cum_growth'] = (df['close'] / df['close'].iloc[0] - 1) * 100
 
-    # 設置預測價格欄位
-    df['estClose'] = df['close']
+    # -----------------------
+    # 2️⃣ 平滑價格
+    # -----------------------
+    df['close_smooth'] = df['close'].ewm(span=5, adjust=False).mean()
 
-    # 指數擬合預測未來 N 天
+    # -----------------------
+    # 3️⃣ 混合擬合預測
+    # -----------------------
     x_data = np.arange(len(df))
-    y_data = df['close'].values
-    popt, _ = curve_fit(exp_func, x_data, y_data, p0=(1000, 1.02))
-    a, b = popt
+    y_data = df['close_smooth'].values
 
-    future_x = np.arange(len(df), len(df) + days_ahead)
-    future_y = exp_func(future_x, a, b)
+    # 指數擬合
+    try:
+        popt, _ = curve_fit(exp_func, x_data, y_data, p0=(y_data[0], 1.01), maxfev=5000)
+        exp_pred = exp_func(np.arange(len(df), len(df) + days_ahead), *popt)
+    except:
+        exp_pred = np.full(days_ahead, y_data[-1])
 
-    future_dates = pd.date_range(df['priceDate'].iloc[-1] + pd.Timedelta(days=1),
-                                 periods=days_ahead, freq='D').date
+    # 線性擬合
+    lin_coef = np.polyfit(x_data, y_data, 1)
+    lin_pred = np.polyval(lin_coef, np.arange(len(df), len(df) + days_ahead))
 
-    predictions = pd.DataFrame({
-        'priceDate': future_dates,
-        'estClose': future_y.round(0).astype(int)
-    })
+    # 混合預測
+    future_y = 0.6 * exp_pred + 0.4 * lin_pred
 
-    # 合併原始資料與預測資料
-    df = pd.concat([df, predictions], ignore_index=True)
+    # -----------------------
+    # 4️⃣ 技術指標滯後調整
+    # -----------------------
+    # 生成未來日期
+    future_dates = pd.date_range(
+        start=df['priceDate'].iloc[-1] + pd.Timedelta(days=1),
+        periods=days_ahead
+    ).date  # 轉成 datetime.date
 
+    future_df = pd.DataFrame({'priceDate': future_dates})
+    future_df['estClose'] = future_y
+    future_df['estClose_adj'] = future_y
+
+    for idx in range(days_ahead):
+        adj = 1.0
+        # RSI 修正
+        if 'RSI' in df.columns:
+            rsi_val = df['RSI'].iloc[-3:].mean()  # 3日滯後均值
+            adj *= 1 + np.tanh((50 - rsi_val) / 50) * 0.02
+        # KDJ J 線修正
+        if 'KDJ' in df.columns:
+            KDJ_last = df['KDJ'].iloc[-3:]  # 取最近3日
+            if isinstance(KDJ_last.iloc[0], (list, tuple, np.ndarray)):
+                J_val = np.mean([x[2] for x in KDJ_last])
+                adj *= 1 + np.tanh(J_val / 50) * 0.02
+        # 均線乖離修正
+        if '5_MA' in df.columns:
+            ma_val = df['5_MA'].iloc[-1]
+            close_val = df['close'].iloc[-1]
+            bias = (close_val - ma_val) / ma_val
+            adj *= 1 - np.tanh(bias) * 0.01
+        future_df.at[idx, 'estClose_adj'] *= adj
+
+    # -----------------------
+    # 5️⃣ 合併
+    # -----------------------
+    df = pd.concat([df, future_df], ignore_index=True, sort=False)
     return df
 
 
@@ -418,14 +443,13 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
             press_low_price = press_low.iloc[-1]['close'] if not press_low.empty else 0
 
             msg = f"日期: {cur['priceDate']}\n"
-            msg += f"PVR: {cur.get('diff_pvr', 0):.2f}\n"
             if not pd.isna(cur.get('close')):
                 msg += f"價格: {cur.get('close', 0):.2f}, 量: {cur.get('volume', 0)}\n"
             else:
                 msg += f"估價: {cur.get('estClose')}, 量: {cur.get('volume', 0)}\n"
             msg += f"(壓力: {press_top_price:.2f} 支撐: {press_low_price:.2f})"
 
-            text = ax.text(0.98, 0.98, msg, ha='right', va='top', transform=ax.transAxes,
+            text = ax.text(1, 1, msg, ha='right', va='top', transform=ax.transAxes,
                            color='red', fontsize=10, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
             ax._indicator_texts = [text]
 
@@ -587,12 +611,12 @@ def detect_rule3(idx, row, df):
 
     # 權重設定
     weights = {
-        'RSI': 1.4,
-        'KDJ': 1.0,
-        'MA': 1.0,
-        'VOL': 0.6,
-        'PVR': 0.8,
-        'MACD': 1.0,
+        'RSI': 1.5,  # 超買敏感度提高 → 高點偏空
+        'KDJ': 0.5,  # 低位反彈減少權重，避免高點誤判
+        'MA': 0.8,
+        'VOL': 0.7,
+        'PVR': 1.2,  # 放量高點加空分
+        'MACD': 0.8,  # 動量指標在高點不要給過多正分
     }
 
     # 底部 / 高位加權
