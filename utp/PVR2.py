@@ -169,10 +169,6 @@ def calc_ma(df):
 
 
 # ===================== 拉高出貨 + 低位承接檢測 =====================
-import numpy as np
-import pandas as pd
-
-
 def detect_trade_signals(df, pct_thresh_up=2.2, pct_thresh_acc=2.0, vol_window=5,
                          upper_shadow_thresh=0.65, lower_shadow_thresh=0.30,
                          rsi=None, macd=None, trend_window=20, cum_window=5):
