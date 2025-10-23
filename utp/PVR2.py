@@ -21,6 +21,7 @@ decimal_place = 2
 analyse_days = 90
 stock_code = []
 codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
+codes = humps.camelize(codes)
 sns.set_theme(style="whitegrid")
 display_matplot = 1  # 是否顯示圖表
 display_df = 1  # 是否顯示詳細數據 (0.不顯示 1.全部顯示 2.只顯示趨勢)
@@ -781,24 +782,23 @@ def detect_rule3(idx, row, df):
     date_difference = current_date - datetime.strptime(str(row['priceDate']), '%Y-%m-%d')
     if date_difference.days <= rec_days:
         if trand > 0.5:
-            stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
+            stock_exists = any(stock['stockCode'] == stock_code for stock in rec_stocks)
             if not stock_exists:
                 rec_stocks.append(
-                    {'stock_code': stock_code, 'stock_name': stock_name, 'volume': row['volume'], 'reason': reason})
+                    {'stockCode': row['stockCode'], 'stockName': row['stockName'], 'volume': row['volume'],
+                     'reason': reason})
     return trand, final_score, reason
 
 
 # ===================== 主流程 =====================
 def main():
     for master in codes:
-        stock_code = master['stock_code']
-        stock_name = master['stock_name']
-        details = MySQL.get_price(stock_code, analyse_days, 'asc')
+        details = MySQL.get_price(master['stockCode'], analyse_days, 'asc')
         details = humps.camelize(details)
-        print(details)
         if not details:
             continue
         df = pd.DataFrame(details)
+        df['stockName'] = master['stockName']
         df['volume'] = (df['volume'] / 1000).round()
         # ===================== 計算指標 =====================
         # 計算RSI
@@ -861,10 +861,10 @@ def main():
         reason = f"{fut_days}日後推估價 / 現價比例: {ratio:.4f}"
         # print(reason)
         if ratio > 1.1:
-            stock_exists = any(stock['stock_code'] == stock_code for stock in rec_stocks)
+            stock_exists = any(stock['stockCode'] == stock_code for stock in rec_stocks)
             if not stock_exists:
                 rec_stocks.append(
-                    {'stock_code': stock_code, 'stock_name': stock_name, 'reason': reason})
+                    {'stockCode': master['stockCode'], 'stockName': master['stockName'], 'reason': reason})
         # ===================== 圖像輸出 =====================
         if display_df == 1:
             print(tabulate(df, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
@@ -874,12 +874,12 @@ def main():
                 tabulate(df_filtered, headers='keys', tablefmt='simple', showindex=False, stralign='left',
                          numalign='left'))
         if display_matplot:
-            plot_stock(stock_code, stock_name, df)
+            plot_stock(master['stockCode'], master['stockName'], df)
 
     print("**************** 推薦股票 ********************")
     rec_stock = []
     for row in rec_stocks:
-        rec_stock.append([row['stock_code'], row['stock_name'], row['reason']])
+        rec_stock.append([row['stockCode'], row['stockName'], row['reason']])
     print(tabulate(rec_stock, headers=['Stock Code', 'Stock Name', 'Reason'], tablefmt='grid'))
 
 
