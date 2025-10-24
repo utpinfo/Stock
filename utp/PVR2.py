@@ -128,6 +128,51 @@ def calculate_rsi_sma(prices, window=14):
     return rsi.fillna(0)
 
 
+def calc_vpmo(df):
+    """
+    計算價量加速度平滑值 (VPMO)
+
+    ---
+    ## 📊 VPMO（價量加速度平滑值）解讀表 (調整後範圍)
+
+    | 區間          | 狀態說明 | 市場意涵 |
+    |----------------|-----------|-----------|
+    | **> +0.7**     | 價加速上升、量跟不上 | 價漲量縮 → 主力可能拉高出貨或末升段 |
+    | **+0.2 ~ +0.7** | 價量協同加速 | 健康上漲趨勢，量能支撐價格 |
+    | **-0.2 ~ +0.2** | 價量同步或持平 | 市場整理期，動能中性 |
+    | **-0.7 ~ -0.2** | 價跌量縮／價漲量縮 | 修正或盤整階段，觀望為主 |
+    | **< -0.7**     | 價下跌加速、量放大 | 明顯空方壓力，恐慌性下殺 |
+
+    ---
+    Returns:
+        pd.DataFrame: 含以下新欄位的 DataFrame
+            - volSpeed: 成交量變化速度
+            - volAcc: 成交量加速度 (平滑後)
+            - priceSpeed: 價格變化速度
+            - priceAcc: 價格加速度 (平滑後)
+            - vpAccRatio: 價量加速度比值
+            - VPMO: 價量加速度平滑值（主指標）
+    """
+    # 成交量與價格的一階、二階差分
+    df['volSpeed'] = df['volume'].diff()
+    df['volAcc'] = df['volSpeed'].diff()
+    df['priceSpeed'] = df['close'].diff()
+    df['priceAcc'] = df['priceSpeed'].diff()
+
+    # 平滑加速度
+    df['volAcc'] = df['volAcc'].rolling(window=3, min_periods=1).mean()
+    df['priceAcc'] = df['priceAcc'].rolling(window=3, min_periods=1).mean()
+
+    # 價量加速度比例
+    df['vpAccRatio'] = df['priceAcc'] / (df['volAcc'].abs() + 1e-9)
+    df['vpAccRatio'] = df['vpAccRatio'].clip(-10, 10)
+
+    # 平滑主指標
+    df['VPMO'] = df['vpAccRatio'].rolling(window=5, min_periods=1).mean()
+
+    return df
+
+
 # ===================== 向量化計算 RSI [ Wilder's smoothing（平滑移动平均）]=====================
 def calculate_rsi_wilder(df, column='close', period=14):
     delta = df[column].diff()
@@ -493,6 +538,7 @@ PANEL_CONFIG = {
     'ampPvr': {'ylabel': '波動PVR', 'type': 'line', 'color': 'blue', 'height': 1},
     'RSI': {'ylabel': '相對強弱[RSI]', 'type': 'line', 'color': 'purple', 'height': 1},
     'OBV': {'ylabel': '能量潮[OBV]', 'type': 'line', 'color': 'purple', 'height': 1},
+    'VPMO': {'ylabel': '價量動[VPMO]', 'type': 'bar', 'color': 'purple', 'height': 1.4},
     'KDJ': {'ylabel': 'KDJ', 'type': 'line', 'color': 'blue', 'height': 1},
     'MACD': {'ylabel': 'MACD', 'type': 'bar', 'color': 'red', 'height': 0.8},
     'revenue': {'ylabel': '營收', 'type': 'bar', 'color': 'blue', 'height': 0.5},
@@ -608,9 +654,24 @@ def plot_stock(stock_code, stock_name, df):
                         color = 'red' if v > 0 else 'green'
                         ax.text(i + 4, 0, f'{sign}{v:.2f}%(月差)', ha='center', va='bottom',
                                 fontsize=10, weight=700, color=color)
+            elif p == 'VPMO':
+                # --- 計算歷史分位數 ---
+                q10, q25, q75, q90 = df[p].quantile([0.10, 0.25, 0.75, 0.90])
+                # --- 顏色對應規則（百分比顯示） ---
+                color_map = [
+                    (df[p] > q90, 'lightgreen', f'> 高加速 ({q90 * 100:.2f}%)'),
+                    ((df[p] > q75) & (df[p] <= q90), 'green', f'偏多 ({q75 * 100:.2f}% ~ {q90 * 100:.2f}%)'),
+                    ((df[p] >= q25) & (df[p] <= q75), 'pink', f'中性 ({q25 * 100:.2f}% ~ {q75 * 100:.2f}%)'),
+                    ((df[p] >= q10) & (df[p] < q25), 'orange', f'偏空 ({q10 * 100:.2f}% ~ {q25 * 100:.2f}%)'),
+                    (df[p] < q10, 'red', f'< 高空 ({q10 * 100:.2f}%)')
+                ]
+                # --- 繪製柱狀圖 ---
+                for mask, color, label in color_map:
+                    ax.bar(df.index, df[p].where(mask, 0), color=color, alpha=0.6, label=label, zorder=2)
+                # 基準線
+                ax.axhline(0, color='black', linestyle='--', linewidth=0.8, zorder=3, label=cfg['ylabel'])
             else:
                 ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6, label=cfg['ylabel'])
-        # ax.set_ylabel(cfg['ylabel'])
         lines, labels = ax.get_legend_handles_labels()
         if lines:  # 有 label 才畫
             ax.legend(lines, labels, fontsize=8, loc='upper left')
@@ -977,7 +1038,7 @@ def main():
         # ===================== 計算指標 =====================
         # 計算RSI
         df['RSI'] = ta.rsx(df['close'], length=14)  # 指定window=14
-
+        calc_vpmo(df)
         # 計算KDJ
         kd = ta.stoch(high=df['high'], low=df['low'], close=df['close'], k=9, d=3, smooth_k=3)
         K = kd['STOCHk_9_3_3'].round(decimal_place)
