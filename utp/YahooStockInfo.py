@@ -59,31 +59,63 @@ def get_revenue(code):
     try:
         path = 'revenue'
         url = f"{domain}/{code}/{path}"
-        print(url)
-        with requests.get(url) as r:
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.text, 'html.parser')
-                data = soup.find(id='qsp-revenue-table').find('div', class_='table-body')
-                result = []
-                if data:
-                    rows = data.find_all('li', class_='List(n)')
-                    for row in rows:
-                        f1 = row.find('div', class_='D(f)').find('div', class_='W(65px)')
-                        f2 = row.find('div', class_='Flx(a)').find('li', class_='Jc(c)').find('span')
-                        parts = f1.text.split('/')
-                        year = int(parts[0])
-                        month = int(parts[1])
-                        date = str(MySQL.get_last_trade_date(code, year, month)[0]['price_date'])
-                        if date == 'None':
-                            date = str(get_end_of_month(year, month))
-                        print(date, '---', f2.text)
-                        # hello = {'year': year, 'quarter': quarter, 'price': f2.text}
-                        data = {'date': date, 'price': f2.text}
-                        result.append(data)
-                # print(result)
-                return result
-    except Exception as e:
-        return
-        # print("An error occurred:", e)
+        print(f"Fetching URL: {url}")
 
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            print(f"Failed to fetch data, status code: {r.status_code}")
+            return []
+
+        soup = BeautifulSoup(r.text, 'html.parser')
+        table_body = soup.find(id='qsp-revenue-table')
+        if not table_body:
+            print("Revenue table not found")
+            return []
+
+        table_body = table_body.find('div', class_='table-body')
+        if not table_body:
+            print("Table body not found")
+            return []
+
+        result = []
+
+        rows = table_body.find_all('li', class_='List(n)')
+        for row in rows:
+            # 日期
+            date_div = row.find('div', class_='D(f)')
+            if not date_div:
+                continue
+            f1 = date_div.find('div', class_='W(65px)')
+            if not f1:
+                continue
+
+            parts = f1.text.strip().split('/')
+            if len(parts) != 2:
+                continue
+            year, month = int(parts[0]), int(parts[1])
+
+            # 價格/營收
+            price_span = row.find('div', class_='Flx(a)')
+            if price_span:
+                price_li = price_span.find('li', class_='Jc(c)')
+                price = price_li.find('span').text.strip() if price_li else None
+            else:
+                price = None
+
+            # 確認日期
+            last_trade = MySQL.get_last_trade_date(code, year, month)
+            if last_trade and last_trade[0]['price_date']:
+                date = str(last_trade[0]['price_date'])
+            else:
+                date = str(get_end_of_month(year, month))
+
+            print(f"{date} --- {price}")
+
+            result.append({'date': date, 'price': price})
+
+        return result
+
+    except Exception as e:
+        print(f"Error in get_revenue: {e}")
+        return []
 # get_revenue('1513')

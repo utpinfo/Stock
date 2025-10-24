@@ -18,8 +18,8 @@ OBV(On Balance Volume)(能量潮指標)(與價同上則看漲, 與價格同下�
 expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
-analyse_days = 90
-stock_code = []
+analyse_days = 120
+stock_code = [4974]
 codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
 codes = humps.camelize(codes)
 sns.set_theme(style="whitegrid")

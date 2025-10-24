@@ -15,10 +15,7 @@ def DailySchedule(stock_kind, stock_code, isin_code,
     msg = f"stock_code:{stock_code}, isin_code:{isin_code}, start_date:{start_date}, end_date:{end_date}, DB:{len(data)}"
     print(msg)
     # rows = yf.Ticker(isin_code).history(start=start_date, end=end_date)
-    if stock_kind == '上櫃':
-        stock_code_yf = stock_code + '.TWO'
-    else:
-        stock_code_yf = stock_code + '.TW'
+    stock_code_yf = f"{stock_code}.TWO" if stock_kind == '上櫃' else f"{stock_code}.TW"
 
     rows = yf.Ticker(stock_code_yf).history(start=start_date, end=end_date)
     rows[['Close', 'Open', 'High', 'Low']] = rows[['Close', 'Open', 'High', 'Low']].fillna(0)
@@ -26,18 +23,6 @@ def DailySchedule(stock_kind, stock_code, isin_code,
         price_date = str(date.date())
         # print(f"日期: {price_date}, 收盤價: {round(row['Close'], 2)}, 成交量: {row['Volume']}")
         MySQL.add_price(stock_code, price_date, row['Open'], row['Close'], row['High'], row['Low'], row['Volume'])
-    '''
-    for i in range(t):
-        year = datetime.now().year - i
-        b_date = datetime(year, 1, 1)
-        e_date = datetime(year, 12, 31)
-        r = FugleUtils.candles(code, b_date, e_date)
-        if r:
-            data = json.loads(r)
-            rows = data['data']
-            for row in rows:
-                MySQL.add_price(code, row['date'], row['close'], row['volume'])
-    '''
 
 
 def MonthlySchedule(code):
