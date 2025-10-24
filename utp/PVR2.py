@@ -355,9 +355,11 @@ def add_growth_and_forecast(df, days_ahead=7):
     ).date  # 轉成 datetime.date
 
     future_df = pd.DataFrame({'priceDate': future_dates})
+    future_df['stockCode'] = df['stockCode']
+    future_df['stockName'] = df['stockName']
     future_df['estClose'] = future_y
     future_df['estClose_adj'] = future_y
-
+    print(future_df)
     for idx in range(days_ahead):
         adj = 1.0
         # RSI 修正
@@ -581,9 +583,9 @@ def plot_stock(stock_code, stock_name, df):
             else:
                 ax.plot(df.index, df[p], color=cfg['color'], label=p)
         elif cfg['type'] == 'bar' and p in df:
-            if p == 'macd':
-                ax.bar(df.index, df['MACD'].where(df['MACD'] > 0, 0), color='red', alpha=0.6)
-                ax.bar(df.index, df['MACD'].where(df['MACD'] < 0, 0), color='blue', alpha=0.6)
+            if p == 'MACD':
+                ax.bar(df.index, df['MACD'].where(df['MACD'] > 0, 0), color='red', alpha=0.6, label=cfg['ylabel'])
+                ax.bar(df.index, df['MACD'].where(df['MACD'] < 0, 0), color='green', alpha=0.6, label=cfg['ylabel'])
             elif p == 'volume':
                 ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6, label=cfg['ylabel'])
 
