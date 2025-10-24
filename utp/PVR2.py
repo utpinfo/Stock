@@ -609,7 +609,7 @@ def plot_stock(stock_code, stock_name, df):
                         ax.text(i + 4, 0, f'{sign}{v:.2f}%(月差)', ha='center', va='bottom',
                                 fontsize=10, weight=700, color=color)
             else:
-                ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6)
+                ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6, label=cfg['ylabel'])
         # ax.set_ylabel(cfg['ylabel'])
         lines, labels = ax.get_legend_handles_labels()
         if lines:  # 有 label 才畫
