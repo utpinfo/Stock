@@ -3,6 +3,7 @@ import datetime
 import requests
 from bs4 import BeautifulSoup
 from utp import MySQL
+
 """
 奇摩頁面, 獲取EPS(單位盈餘)
 奇摩頁面, 獲取REVENUE(營收)
@@ -109,7 +110,7 @@ def get_revenue(code):
             else:
                 date = str(get_end_of_month(year, month))
 
-            print(f"{date} --- {price}")
+            # print(f"{date} --- {price}")
 
             result.append({'date': date, 'price': price})
 

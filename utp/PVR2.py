@@ -404,7 +404,7 @@ def add_growth_and_forecast(df, days_ahead=7):
     future_df['stockName'] = df['stockName']
     future_df['estClose'] = future_y
     future_df['estClose_adj'] = future_y
-    print(future_df)
+    # print(future_df)
     for idx in range(days_ahead):
         adj = 1.0
         # RSI 修正
