@@ -582,7 +582,7 @@ def plot_stock(stock_code, stock_name, df):
                 ax.bar(df.index, df['MACD'].where(df['MACD'] > 0, 0), color='red', alpha=0.6)
                 ax.bar(df.index, df['MACD'].where(df['MACD'] < 0, 0), color='blue', alpha=0.6)
             elif p == 'volume':
-                ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6)
+                ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6, label=cfg['ylabel'])
 
                 y_marker = -df['volume'].min() * 0.8  # 標記位置
 
@@ -598,13 +598,14 @@ def plot_stock(stock_code, stock_name, df):
                 if 'diffRevenue' in df.columns and df['diffRevenue'].notna().any():
                     lh = df['diffRevenue'].dropna()
                     for i, v in lh.items():
-                        sign = '+' if v > 1 else '-'
-                        color = 'red' if v > 1 else 'green'
-                        ax.text(i + 2, 0, f'{sign}{v:.2f}%', ha='center', va='bottom',
+                        v -= 1
+                        sign = '+' if v > 0 else '-'
+                        color = 'red' if v > 0 else 'green'
+                        ax.text(i + 4, 0, f'{sign}{v:.2f}%(月差)', ha='center', va='bottom',
                                 fontsize=10, weight=700, color=color)
             else:
                 ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6)
-        ax.set_ylabel(cfg['ylabel'])
+        # ax.set_ylabel(cfg['ylabel'])
         lines, labels = ax.get_legend_handles_labels()
         if lines:  # 有 label 才畫
             ax.legend(lines, labels, fontsize=8, loc='upper left')
