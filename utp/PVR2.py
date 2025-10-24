@@ -10,6 +10,8 @@ from matplotlib.gridspec import GridSpec
 import humps
 from scipy.optimize import curve_fit
 
+from utp.Schedule import MonthlySchedule
+
 """
 OBV(On Balance Volume)(能量潮指標)(與價同上則看漲, 與價格同下則看跌, 如果與價背離則反轉)
 公式：OBV =  OBV(T-1) + Volume X (math.copysign(1, diff_volume))
@@ -19,7 +21,7 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 120
-stock_code = [4974]
+stock_code = []
 codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
 codes = humps.camelize(codes)
 sns.set_theme(style="whitegrid")
@@ -384,6 +386,7 @@ def add_growth_and_forecast(df, days_ahead=7):
 
 
 def add_revenue(df, stock_code):
+    MonthlySchedule(stock_code)  # 寫入月營收
     revenues = MySQL.get_revenue(stock_code=stock_code, limit=None, sort='asc')
     if not revenues:
         print(f"No revenue data for {stock_code}")
@@ -1014,7 +1017,7 @@ def main():
         # 計算均線
         df = calc_ma(df)
         # 月報數據
-        df = add_revenue(df, stock_code)
+        df = add_revenue(df, master['stockCode'])
         # ===================== 推估走勢 =====================
         # 1. 檢測異常波動
         df = calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2)  # 1. 異常主力
