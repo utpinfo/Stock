@@ -491,8 +491,8 @@ PANEL_CONFIG = {
     'close': {'ylabel': '價格', 'type': 'line', 'color': 'red', 'height': 2},
     'volume': {'ylabel': '成交量', 'type': 'bar', 'color': '#ff00ff', 'height': 1},
     'ampPvr': {'ylabel': '波動PVR', 'type': 'line', 'color': 'blue', 'height': 1},
-    'RSI': {'ylabel': 'RSI', 'type': 'line', 'color': 'purple', 'height': 1},
-    'OBV': {'ylabel': 'OBV', 'type': 'line', 'color': 'purple', 'height': 1},
+    'RSI': {'ylabel': '相對強弱[RSI]', 'type': 'line', 'color': 'purple', 'height': 1},
+    'OBV': {'ylabel': '能量潮[OBV]', 'type': 'line', 'color': 'purple', 'height': 1},
     'KDJ': {'ylabel': 'KDJ', 'type': 'line', 'color': 'blue', 'height': 1},
     'MACD': {'ylabel': 'MACD', 'type': 'bar', 'color': 'red', 'height': 0.8},
     'revenue': {'ylabel': '營收', 'type': 'bar', 'color': 'blue', 'height': 0.5},
@@ -559,7 +559,7 @@ def plot_stock(stock_code, stock_name, df):
             elif p == 'RSI':
                 ax.axhline(70, color='red', linestyle='dashed', linewidth=0.7)
                 ax.axhline(30, color='green', linestyle='dashed', linewidth=0.7)
-                ax.plot(df.index, df[p], color=cfg['color'], label=p)
+                ax.plot(df.index, df[p], color=cfg['color'], label=cfg['ylabel'])
             elif p == 'KDJ':
                 # 畫三條線
                 K = [x[0] if isinstance(x, (list, tuple)) else np.nan for x in df['KDJ']]
@@ -581,7 +581,7 @@ def plot_stock(stock_code, stock_name, df):
                 ax.scatter(death_cross_idx, [K[i] for i in death_cross_idx], marker='v', color='green', s=50,
                            label='死叉')
             else:
-                ax.plot(df.index, df[p], color=cfg['color'], label=p)
+                ax.plot(df.index, df[p], color=cfg['color'], label=cfg['ylabel'])
         elif cfg['type'] == 'bar' and p in df:
             if p == 'MACD':
                 ax.bar(df.index, df['MACD'].where(df['MACD'] > 0, 0), color='red', alpha=0.6, label=cfg['ylabel'])
