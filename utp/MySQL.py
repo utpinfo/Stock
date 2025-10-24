@@ -99,13 +99,31 @@ def add_price(stock_code, price_date, open, close, high, low, volume=None):
     helper.close()
 
 
-def get_revenue():
+def get_revenue(stock_code, limit, sort='asc'):
     helper = MySQLHelper(host='127.0.0.1', user='root', password='', database='stock')
     helper.connect()
-    sql = "select * from revenue"
-    data = helper.execute_query(sql)
+    sql = """
+        SELECT stock_code, revenue_date, revenue
+        FROM (
+            SELECT *
+            FROM revenue
+            WHERE stock_code = %s
+    """
+    params = [stock_code]
+    # 內層排序與限制筆數
+    if limit:
+        sql += " ORDER BY revenue_date DESC LIMIT %s"
+        params.append(limit)
+    else:
+        sql += " ORDER BY revenue_date DESC"
+
+    # 外層排序
+    sql += ") AS t ORDER BY t.revenue_date " + sort
+
+    data = helper.execute_query(sql, tuple(params))
     helper.close()
     return data
+
 
 
 def add_revenue(stock_code, revenue_date, revenue):

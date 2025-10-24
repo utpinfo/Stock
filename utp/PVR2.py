@@ -383,6 +383,27 @@ def add_growth_and_forecast(df, days_ahead=7):
     return df
 
 
+def add_revenue(df, stock_code):
+    revenues = MySQL.get_revenue(stock_code=stock_code, limit=None, sort='asc')
+    if not revenues:
+        print(f"No revenue data for {stock_code}")
+        return df
+
+    revenues = humps.camelize(revenues)
+    dfr = pd.DataFrame(revenues)
+    dfr['diffRevenue'] = dfr['revenue'] / dfr['revenue'].ffill().shift(1)
+    df = pd.merge(
+        df,
+        dfr[['revenueDate', 'revenue', 'diffRevenue']],
+        left_on='priceDate',
+        right_on='revenueDate',
+        how='left'
+    )
+    df.drop(columns=['revenueDate'], inplace=True)
+    df = df.sort_values('priceDate').reset_index(drop=True)
+    return df
+
+
 # 定义鼠标移动事件处理程序
 def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
     """滑鼠移動事件：在所有子圖同步顯示指示線，橫線對應各軸資料"""
@@ -469,6 +490,7 @@ PANEL_CONFIG = {
     'OBV': {'ylabel': 'OBV', 'type': 'line', 'color': 'purple', 'height': 1},
     'KDJ': {'ylabel': 'KDJ', 'type': 'line', 'color': 'blue', 'height': 1},
     'MACD': {'ylabel': 'MACD', 'type': 'bar', 'color': 'red', 'height': 0.8},
+    'revenue': {'ylabel': '營收', 'type': 'bar', 'color': 'blue', 'height': 0.5},
 }
 
 
@@ -571,7 +593,15 @@ def plot_stock(stock_code, stock_name, df):
                 # 低位承接 scatter（只加一次 label）
                 dw_indices = df.index[df['低位承接'].notna() & df['低位承接']]
                 ax.scatter(dw_indices, [y_marker] * len(dw_indices), marker='^', color='red', s=80, label='低位承接')
-                # ax.set_ylim(y_marker - 50, df[p].max() * 1.1)
+            elif p == 'revenue':
+                ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6, label=cfg['ylabel'])
+                if 'diffRevenue' in df.columns and df['diffRevenue'].notna().any():
+                    lh = df['diffRevenue'].dropna()
+                    for i, v in lh.items():
+                        sign = '+' if v > 1 else '-'
+                        color = 'red' if v > 1 else 'green'
+                        ax.text(i + 2, 0, f'{sign}{v:.2f}%', ha='center', va='bottom',
+                                fontsize=10, weight=700, color=color)
             else:
                 ax.bar(df.index, df[p], color=cfg['color'], alpha=0.6)
         ax.set_ylabel(cfg['ylabel'])
@@ -982,7 +1012,8 @@ def main():
         df['TSI'] = tsi_df.iloc[:, 0]  # 取第一欄
         # 計算均線
         df = calc_ma(df)
-
+        # 月報數據
+        df = add_revenue(df, stock_code)
         # ===================== 推估走勢 =====================
         # 1. 檢測異常波動
         df = calc_abnormal_force(df, window=10, min_periods=3, decimal_place=2)  # 1. 異常主力
@@ -1005,11 +1036,11 @@ def main():
                     {'stockCode': master['stockCode'], 'stockName': master['stockName'], 'reason': reason})
         # ===================== 圖像輸出 =====================
         if display_df == 1:
-            print(tabulate(df, headers='keys', tablefmt='simple', showindex=False, stralign='left', numalign='left'))
+            print(tabulate(df, headers='keys', tablefmt='grid', showindex=False, stralign='left', numalign='left'))
         elif display_df == 2:
             df_filtered = df[df['trand'].notna()]  # 選出 trand 不為 NaN 的列
             print(
-                tabulate(df_filtered, headers='keys', tablefmt='simple', showindex=False, stralign='left',
+                tabulate(df_filtered, headers='keys', tablefmt='grid', showindex=False, stralign='left',
                          numalign='left'))
         if display_matplot:
             plot_stock(master['stockCode'], master['stockName'], df)
