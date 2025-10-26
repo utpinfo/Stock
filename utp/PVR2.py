@@ -20,7 +20,7 @@ OBV(On Balance Volume)(能量潮指標)(與價同上則看漲, 與價格同下�
 expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
-analyse_days = 120
+analyse_days = 90
 stock_code = []
 codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
 codes = humps.camelize(codes)
@@ -582,6 +582,14 @@ def plot_stock(stock_code, stock_name, df):
         # 繪圖
         if cfg['type'] == 'line' and p in df:
             if p == 'close':
+                width = 0.6  # 直接用相對寬度
+
+                for i in df.index:
+                    o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
+                    color = 'g' if c >= o else 'r'
+                    ax.vlines(i, l, h, color='black')
+                    ax.bar(i, abs(o - c), bottom=min(o, c), width=width, color=color, edgecolor='black')
+
                 ax.plot(df.index, df[p], color=cfg['color'], label='價格', linewidth=2)
                 ax.plot(df.index, df['estClose'], color=cfg['color'], label='估價', linewidth=1,
                         linestyle='dashed')
