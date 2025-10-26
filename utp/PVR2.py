@@ -586,7 +586,7 @@ def plot_stock(stock_code, stock_name, df):
 
                 for i in df.index:
                     o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
-                    color = 'g' if c >= o else 'r'
+                    color = 'r' if c >= o else 'g'
                     ax.vlines(i, l, h, color='black')
                     ax.bar(i, abs(o - c), bottom=min(o, c), width=width, color=color, edgecolor='black')
 
