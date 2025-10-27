@@ -21,7 +21,7 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-stock_code = []
+stock_code = [6176]
 codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
 codes = humps.camelize(codes)
 sns.set_theme(style="whitegrid")
@@ -533,12 +533,12 @@ def on_mouse_move_auto(event, df, axes, stock_code, stock_name):
 
 # ===================== 畫圖 =====================
 PANEL_CONFIG = {
-    'close': {'ylabel': '價格', 'type': 'line', 'color': 'red', 'height': 2},
+    'close': {'ylabel': '價格', 'type': 'line', 'color': 'red', 'height': 3},
     'volume': {'ylabel': '成交量', 'type': 'bar', 'color': '#ff00ff', 'height': 1},
     'ampPvr': {'ylabel': '波動PVR', 'type': 'line', 'color': 'blue', 'height': 1},
     'RSI': {'ylabel': '相對強弱[RSI]', 'type': 'line', 'color': 'purple', 'height': 1},
     'OBV': {'ylabel': '能量潮[OBV]', 'type': 'line', 'color': 'purple', 'height': 1},
-    'VPMO': {'ylabel': '價量動[VPMO]', 'type': 'bar', 'color': 'purple', 'height': 1.4},
+    'VPMO': {'ylabel': '價量動[VPMO]', 'type': 'bar', 'color': 'purple', 'height': 1},
     'KDJ': {'ylabel': 'KDJ', 'type': 'line', 'color': 'blue', 'height': 1},
     'MACD': {'ylabel': 'MACD', 'type': 'bar', 'color': 'red', 'height': 0.8},
     'revenue': {'ylabel': '營收', 'type': 'bar', 'color': 'blue', 'height': 0.5},
@@ -547,6 +547,9 @@ PANEL_CONFIG = {
 
 def plot_stock(stock_code, stock_name, df):
     plt.rcParams['font.sans-serif'] = ['Heiti TC']
+    plt.rcParams['grid.linewidth'] = 0.3
+    plt.rcParams['grid.color'] = 'gray'
+    plt.rcParams['grid.alpha'] = 0.4
     fig = plt.figure(figsize=(12, 10))
     plt.get_current_fig_manager().set_window_title(f"{stock_code} - {stock_name}")
 
@@ -587,10 +590,10 @@ def plot_stock(stock_code, stock_name, df):
                 for i in df.index:
                     o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
                     color = 'r' if c >= o else 'g'
-                    ax.vlines(i, l, h, color='black')
+                    ax.vlines(i, l, h, color=color, linewidth=0.5)
                     ax.bar(i, abs(o - c), bottom=min(o, c), width=width, color=color, edgecolor='black')
 
-                ax.plot(df.index, df[p], color=cfg['color'], label='價格', linewidth=2)
+                ax.plot(df.index, df[p], color=cfg['color'], label='價格', linewidth=1)
                 ax.plot(df.index, df['estClose'], color=cfg['color'], label='估價', linewidth=1,
                         linestyle='dashed')
                 # 繪製均線
@@ -707,151 +710,14 @@ def plot_stock(stock_code, stock_name, df):
     plt.show()
 
 
-def detect_rule1(idx, row, df):
-    score = 0.0
-    trand = 0
-    final_score = 0
-
-    # === 超保守權重 ===
-    pvr = row['ampPvr']
-    rsi = row['RSI']
-    vol_ratio = row['5_V_MA'] / row['15_V_MA'] if row['15_V_MA'] != 0 else 1
-
-    # === 🔥 PVR 極端閾值（誤差率核心） ===
-    if pvr > 3.5:  # 2.8→3.5 極端放量
-        trand, label = 1, '強買'
-        final_score = 100
-    elif pvr < -3.0:  # -2.3→-3.0 極端縮量
-        trand, label = -1, '強賣'
-        final_score = -100
-    else:
-        # === 多重確認（3/4 條件才進場） ===
-        buy_signals = 0
-        sell_signals = 0
-
-        # 1. RSI 嚴格
-        if 25 <= rsi <= 38:
-            buy_signals += 1
-        elif rsi >= 72:
-            sell_signals += 1
-
-        # 2. 成交量 嚴格
-        if vol_ratio >= 2.2:
-            buy_signals += 1
-        elif vol_ratio <= 0.4:
-            sell_signals += 1
-
-        # 3. 均線 嚴格
-        if '10_MA' in row and row['10_MA'] != 0:
-            ma_diff = (row['close'] - row['10_MA']) / row['10_MA']
-            if ma_diff <= -0.08:
-                buy_signals += 1  # 8%以下
-            elif ma_diff >= 0.10:
-                sell_signals += 1  # 10%以上
-
-        # 4. MACD 確認
-        macd_strength = row['DIF'] - row['DEA']
-        if macd_strength >= 0.4:
-            buy_signals += 1
-        elif macd_strength <= -0.3:
-            sell_signals += 1
-
-        # === 3/4 確認才進場 ===
-        if buy_signals >= 3:
-            trand, label = 1, '買入'
-            final_score = 85
-        elif sell_signals >= 3:
-            trand, label = -1, '賣出'
-            final_score = -85
-        else:
-            trand, label = 0, '觀望'
-            final_score = 0
-
-    # === 寫入 ===
-    reason = f"★ {label} ({final_score:+.1f}%) | PVR={pvr:.2f}"
-    df.at[idx, 'trand'] = trand
-    df.at[idx, 'score'] = round(final_score, 2)
-    df.at[idx, 'reason'] = reason
-
-    return trand, final_score, reason
-
-
-def detect_rule1(idx, row, df):
-    score = 0.0
-    trand = 0
-    final_score = 0
-
-    # === 超保守權重 ===
-    pvr = row['ampPvr']
-    rsi = row['RSI']
-    vol_ratio = row['5_V_MA'] / row['15_V_MA'] if row['15_V_MA'] != 0 else 1
-
-    # === 🔥 PVR 極端閾值（誤差率核心） ===
-    if pvr > 3.5:  # 2.8→3.5 極端放量
-        trand, label = 1, '強買'
-        final_score = 100
-    elif pvr < -3.0:  # -2.3→-3.0 極端縮量
-        trand, label = -1, '強賣'
-        final_score = -100
-    else:
-        # === 多重確認（3/4 條件才進場） ===
-        buy_signals = 0
-        sell_signals = 0
-
-        # 1. RSI 嚴格
-        if 25 <= rsi <= 38:
-            buy_signals += 1
-        elif rsi >= 72:
-            sell_signals += 1
-
-        # 2. 成交量 嚴格
-        if vol_ratio >= 2.2:
-            buy_signals += 1
-        elif vol_ratio <= 0.4:
-            sell_signals += 1
-
-        # 3. 均線 嚴格
-        if '10_MA' in row and row['10_MA'] != 0:
-            ma_diff = (row['close'] - row['10_MA']) / row['10_MA']
-            if ma_diff <= -0.08:
-                buy_signals += 1  # 8%以下
-            elif ma_diff >= 0.10:
-                sell_signals += 1  # 10%以上
-
-        # 4. MACD 確認
-        macd_strength = row['DIF'] - row['DEA']
-        if macd_strength >= 0.4:
-            buy_signals += 1
-        elif macd_strength <= -0.3:
-            sell_signals += 1
-
-        # === 3/4 確認才進場 ===
-        if buy_signals >= 3:
-            trand, label = 1, '買入'
-            final_score = 85
-        elif sell_signals >= 3:
-            trand, label = -1, '賣出'
-            final_score = -85
-        else:
-            trand, label = 0, '觀望'
-            final_score = 0
-
-    # === 寫入 ===
-    reason = f"★ {label} ({final_score:+.1f}%) | PVR={pvr:.2f}"
-    df.at[idx, 'trand'] = trand
-    df.at[idx, 'score'] = round(final_score, 2)
-    df.at[idx, 'reason'] = reason
-
-    return trand, final_score, reason
-
-
 def detect_rule3(idx, row, df):
     """
-    detect_rule3_v15 - 支援金叉/死叉型態 + 築底修正
+    detect_rule3_v16 - 支援金叉/死叉型態 + 築底修正 + 量價行為判斷
     - 高位放量/超買 → 偏空
     - 低位縮量/超賣 → 偏多
     - 死叉分為高檔死叉（偏空）與低檔死叉（築底偏多）
-    - 無量下跌 → 底部偏多加分
+    - 無量下跌、價跌量縮、RSI背離 → 底部偏多加分
+    - 價漲量縮、價跌量增 → 高位偏空扣分
     - RSI / KDJ / MACD 使用趨勢化比例分數
     """
 
@@ -860,19 +726,18 @@ def detect_rule3(idx, row, df):
 
     # 權重設定
     weights = {
-        'RSI': 1.5,  # 超買敏感度提高 → 高點偏空
-        'KDJ': 0.5,  # 低位反彈減少權重，避免高點誤判
+        'RSI': 1,
+        'KDJ': 0.5,
         'MA': 0.8,
         'VOL': 0.7,
-        'PVR': 1.2,  # 放量高點加空分
-        'MACD': 0.8,  # 動量指標在高點不要給過多正分
+        'PVR': 1.2,
+        'MACD': 0.8,
     }
 
-    # 底部 / 高位加權
     bottom_boost = 5
     top_penalty = 5
 
-    # === 基本資料 ===
+    # 基本資料
     rsi = row['RSI']
     kdj = row['KDJ']
     if isinstance(kdj, (list, tuple)):
@@ -882,45 +747,40 @@ def detect_rule3(idx, row, df):
 
     pvr = row['ampPvr']
     macd_strength = row['DIF'] - row['DEA']
-    diff_price = row['diffPrice']
+    diff_price = row['5_MA'] - row['10_MA']
 
     prev_rsi = row.get('prev_RSI', rsi)
     prev_J = row.get('prev_J', J)
-
-    # 前一日KDJ（供金叉死叉判斷）
     prev_K, prev_D, _ = (np.nan, np.nan, np.nan)
     if 'prev_KDJ' in row and isinstance(row['prev_KDJ'], (list, tuple)):
         prev_K, prev_D, _ = row['prev_KDJ']
 
-    # === 底部 / 高位 ===
-    is_bottom = (rsi < 40 and J < 40 and pvr < 0)
-    is_top = (rsi > 60 and J > 70 and pvr > 2)
+    # 底部 / 高位判斷
+    is_bottom = (rsi < 40 and J < 40)
+    is_top = (rsi > 60 and J > 70)
 
-    # === 量比 ===
+    # 量比(短線成交筆)
     vol_ratio = 1
     if '15_V_MA' in row and row['15_V_MA'] != 0:
         vol_ratio = row['5_V_MA'] / row['15_V_MA']
 
     # === RSI 趨勢化分數 ===
-    rsi_trend = prev_rsi - rsi
-    rsi_score = np.clip(rsi_trend / 50, -1, 1)
+    rsi_ma3 = df['RSI'].rolling(3).mean().shift(1).iloc[idx]  # 計算前一日RSI的3期移動平均
+    rsi_trend = rsi - rsi_ma3  # 計算當前RSI與前一日3期均值的差異（趨勢強度）
+    rsi_score = np.clip(rsi_trend / 50, -1, 1)  # 將趨勢差異標準化為[-1, 1]範圍的分數
     if is_bottom:
         rsi_score += bottom_boost
     elif is_top:
         rsi_score -= top_penalty
-    rsi_score = np.clip(rsi_score, -1, 1)
-    score += rsi_score * weights['RSI']
+    rsi_score = np.clip(rsi_score, -1, 1)  # 若觸底加獎勵、觸頂扣懲罰，然後再限制範圍
+    score += rsi_score * weights['RSI']  # 將RSI分數加入總分（乘以權重）
     reasons.append(f"RSI={rsi:.1f} (前{prev_rsi:.1f}) → {rsi_score:+.2f}")
 
-    # === 🔥 KDJ 金叉／死叉 + 趨勢分數 ===
+    # === KDJ 金叉/死叉 + 趨勢分數 ===
     kdj_diff = J - prev_J
     kdj_score = np.clip(kdj_diff / 50, -1, 1)
-
-    # --- 新增：金叉 / 死叉 判斷 ---
     is_gold_cross = (K > D) and (prev_K <= prev_D)
     is_dead_cross = (K < D) and (prev_K >= prev_D)
-
-    # 高檔死叉 / 低檔死叉分流
     is_top_dead = is_dead_cross and (K > 70 or D > 70)
     is_bottom_dead = is_dead_cross and (K < 40 and D < 40 and J < 30)
 
@@ -937,12 +797,10 @@ def detect_rule3(idx, row, df):
         kdj_score -= 0.3
         reasons.append("KDJ死叉 → 趨勢轉弱")
 
-    # 原底部 / 高位 加權
     if is_bottom:
         kdj_score += bottom_boost
     elif is_top:
         kdj_score -= top_penalty
-
     kdj_score = np.clip(kdj_score, -1, 1)
     score += kdj_score * weights['KDJ']
     reasons.append(f"KDJ趨勢 J={J:.1f} (前{prev_J:.1f}) → {kdj_score:+.2f}")
@@ -976,7 +834,7 @@ def detect_rule3(idx, row, df):
         pvr_score -= top_penalty
     pvr_score = np.clip(pvr_score, -1, 1)
     score += pvr_score * weights['PVR']
-    reasons.append(f"PVR振幅={pvr:.2f} → {pvr_score:+.2f}")
+    reasons.append(f"PVR={pvr:.2f} → {pvr_score:+.2f}")
 
     # === MACD ===
     macd_trend = macd_strength / (abs(row['DIF']) + 1e-6)
@@ -988,17 +846,47 @@ def detect_rule3(idx, row, df):
     score += macd_trend * weights['MACD']
     reasons.append(f"MACD差={macd_strength:.4f} → {macd_trend:+.2f}")
 
-    # === 無量下跌判斷 ===
-    low_volume_down = (diff_price < 0) and (vol_ratio < 0.8) and (pvr < 0)
+    # === 量價行為判斷 ===
+    # 無量下跌
+    low_volume_down = (diff_price < 0.3) and (vol_ratio < 0.8) and (pvr < 0)
     if low_volume_down:
         score += bottom_boost
         reasons.append("無量下跌 → 偏多加分")
 
+    # 價跌量縮
+    if (diff_price < 0) and (vol_ratio < 0.7) and (pvr < 0):
+        score += bottom_boost * 0.8
+        reasons.append("價跌量縮 → 籌碼沉澱")
+
+    # 價漲量縮
+    if (diff_price > 0) and (vol_ratio < 0.8) and (pvr > 1):
+        score -= top_penalty * 0.5
+        reasons.append("價漲量縮 → 假反彈")
+
+    # 價跌量增
+    if (diff_price < 0) and (vol_ratio > 1.5):
+        if is_bottom:
+            score += bottom_boost * 0.5
+        else:
+            score -= top_penalty * 0.6
+        reasons.append("價跌量增 → 量價異常")
+
+    # 價漲量增
+    if (diff_price > 0) and (vol_ratio > 1.5) and (pvr > 0):
+        score += bottom_boost * 0.6
+        reasons.append("價漲量增 → 多頭啟動")
+
+    # RSI 背離
+    if idx >= 2:
+        prev_close = df.at[idx - 1, 'close']
+        prev_rsi = df.at[idx - 1, 'RSI']
+        if (row['close'] < prev_close) and (row['RSI'] > prev_rsi):
+            score += bottom_boost * 0.7
+            reasons.append("RSI 背離 → 底部反轉")
+
     # === 分數標準化 ===
     max_possible = sum(weights.values())
     final_score = np.clip(score / max_possible, -1, 1) * 100
-
-    # 動態觀望閾值
     upper_thresh, lower_thresh = 30, -30
     if is_top: upper_thresh = 25
     if is_bottom: lower_thresh = -25
@@ -1021,7 +909,6 @@ def detect_rule3(idx, row, df):
         df.at[idx, 'reason'] = reason
 
     current_date = datetime.now()
-    # 计算日期差
     date_difference = current_date - datetime.strptime(str(row['priceDate']), '%Y-%m-%d')
     if date_difference.days <= rec_days:
         if trand > 0.5:
