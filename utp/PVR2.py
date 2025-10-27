@@ -10,7 +10,7 @@ from matplotlib.gridspec import GridSpec
 import humps
 from scipy.optimize import curve_fit
 
-from utp.Schedule import MonthlySchedule
+from utp.Schedule import MonthlySchedule, DailySchedule
 
 """
 OBV(On Balance Volume)(能量潮指標)(與價同上則看漲, 與價格同下則看跌, 如果與價背離則反轉)
@@ -21,7 +21,7 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-stock_code = [6176]
+stock_code = []
 codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
 codes = humps.camelize(codes)
 sns.set_theme(style="whitegrid")
@@ -585,13 +585,12 @@ def plot_stock(stock_code, stock_name, df):
         # 繪圖
         if cfg['type'] == 'line' and p in df:
             if p == 'close':
-                width = 0.6  # 直接用相對寬度
-
+                # 價格上下影線
                 for i in df.index:
                     o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
                     color = 'r' if c >= o else 'g'
                     ax.vlines(i, l, h, color=color, linewidth=0.5)
-                    ax.bar(i, abs(o - c), bottom=min(o, c), width=width, color=color, edgecolor='black')
+                    ax.bar(i, abs(o - c), bottom=min(o, c), width=0.5, color=color, edgecolor='black')
 
                 ax.plot(df.index, df[p], color=cfg['color'], label='價格', linewidth=1)
                 ax.plot(df.index, df['estClose'], color=cfg['color'], label='估價', linewidth=1,
@@ -710,22 +709,19 @@ def plot_stock(stock_code, stock_name, df):
     plt.show()
 
 
-def detect_rule3(idx, row, df):
+def detect_rule3(idx, row, df, rec_days=7, rec_stocks=[], stock_code=None):
     """
-    detect_rule3_v16 - 支援金叉/死叉型態 + 築底修正 + 量價行為判斷
-    - 高位放量/超買 → 偏空
-    - 低位縮量/超賣 → 偏多
-    - 死叉分為高檔死叉（偏空）與低檔死叉（築底偏多）
-    - 無量下跌、價跌量縮、RSI背離 → 底部偏多加分
-    - 價漲量縮、價跌量增 → 高位偏空扣分
+    detect_rule3_weighted - 日期加權 + 平滑化指標 + 動態權重
+    - 金叉/死叉 + 築底修正 + 量價行為判斷
     - RSI / KDJ / MACD 使用趨勢化比例分數
+    - 指標分數依日期衰減加權
     """
 
     score = 0.0
     reasons = []
 
-    # 權重設定
-    weights = {
+    # 基本權重
+    base_weights = {
         'RSI': 1,
         'KDJ': 0.5,
         'MA': 0.8,
@@ -736,6 +732,13 @@ def detect_rule3(idx, row, df):
 
     bottom_boost = 5
     top_penalty = 5
+
+    # 日期加權：越近越高
+    current_date = datetime.now()
+    price_date = datetime.strptime(str(row['priceDate']), '%Y-%m-%d')
+    date_diff = (current_date - price_date).days
+    date_weight = np.exp(-date_diff / 30)  # 30日半衰期
+    # print(f"日期權重={date_weight:.3f}")
 
     # 基本資料
     rsi = row['RSI']
@@ -764,21 +767,23 @@ def detect_rule3(idx, row, df):
     if '15_V_MA' in row and row['15_V_MA'] != 0:
         vol_ratio = row['5_V_MA'] / row['15_V_MA']
 
-    # === RSI 趨勢化分數 ===
-    rsi_ma3 = df['RSI'].rolling(3).mean().shift(1).iloc[idx]  # 計算前一日RSI的3期移動平均
-    rsi_trend = rsi - rsi_ma3  # 計算當前RSI與前一日3期均值的差異（趨勢強度）
-    rsi_score = np.clip(rsi_trend / 50, -1, 1)  # 將趨勢差異標準化為[-1, 1]範圍的分數
-    if is_bottom:
-        rsi_score += bottom_boost
-    elif is_top:
-        rsi_score -= top_penalty
-    rsi_score = np.clip(rsi_score, -1, 1)  # 若觸底加獎勵、觸頂扣懲罰，然後再限制範圍
-    score += rsi_score * weights['RSI']  # 將RSI分數加入總分（乘以權重）
-    reasons.append(f"RSI={rsi:.1f} (前{prev_rsi:.1f}) → {rsi_score:+.2f}")
+    # === RSI 趨勢化分數（3日MA平滑） ===
+    rsi_ma3 = df['RSI'].rolling(3).mean().shift(1).iloc[idx]  # 前一日3期RSI均值
+    rsi_trend = rsi - rsi_ma3
+    rsi_score = np.clip(rsi_trend / 50, -1, 1)
+    # 觸底/觸頂調整
+    rsi_score += bottom_boost if is_bottom else -top_penalty if is_top else 0
+    rsi_score = np.clip(rsi_score, -1, 1)
+    # 動態權重 + 日期加權
+    rsi_weight = base_weights['RSI'] * (1.2 if is_bottom else 0.8 if is_top else 1)
+    score += rsi_score * rsi_weight * date_weight
+    reasons.append(f"RSI={rsi:.1f} (ma{rsi_ma3:.1f}) → {rsi_score:+.2f}")
 
-    # === KDJ 金叉/死叉 + 趨勢分數 ===
-    kdj_diff = J - prev_J
-    kdj_score = np.clip(kdj_diff / 50, -1, 1)
+    # === KDJ 金叉/死叉 + 平滑趨勢分數 ===
+    J_ema3 = df['J'].ewm(span=3, adjust=False).mean().shift(1).iloc[idx]
+    kdj_trend = J - J_ema3
+    kdj_score = np.clip(kdj_trend / 50, -1, 1)
+
     is_gold_cross = (K > D) and (prev_K <= prev_D)
     is_dead_cross = (K < D) and (prev_K >= prev_D)
     is_top_dead = is_dead_cross and (K > 70 or D > 70)
@@ -797,13 +802,11 @@ def detect_rule3(idx, row, df):
         kdj_score -= 0.3
         reasons.append("KDJ死叉 → 趨勢轉弱")
 
-    if is_bottom:
-        kdj_score += bottom_boost
-    elif is_top:
-        kdj_score -= top_penalty
+    kdj_score += bottom_boost if is_bottom else -top_penalty if is_top else 0
     kdj_score = np.clip(kdj_score, -1, 1)
-    score += kdj_score * weights['KDJ']
-    reasons.append(f"KDJ趨勢 J={J:.1f} (前{prev_J:.1f}) → {kdj_score:+.2f}")
+    kdj_weight = base_weights['KDJ'] * (1.1 if is_bottom else 0.9 if is_top else 1)
+    score += kdj_score * kdj_weight * date_weight
+    reasons.append(f"KDJ J={J:.1f} (EWM{J_ema3:.1f}) → {kdj_score:+.2f}")
 
     # === 均線乖離 ===
     if '10_MA' in row and row['10_MA'] != 0:
@@ -813,7 +816,7 @@ def detect_rule3(idx, row, df):
             ma_score *= -0.5
         if is_bottom and ma_diff < 0:
             ma_score *= 0.5
-        score += ma_score * weights['MA']
+        score += ma_score * base_weights['MA'] * date_weight
         reasons.append(f"均線乖離={ma_diff * 100:.1f}% → {ma_score:+.2f}")
 
     # === 成交量 ===
@@ -823,7 +826,7 @@ def detect_rule3(idx, row, df):
     elif is_top and vol_ratio > 1.2:
         vol_score -= top_penalty
     vol_score = np.clip(vol_score, -1, 1)
-    score += vol_score * weights['VOL']
+    score += vol_score * base_weights['VOL'] * date_weight
     reasons.append(f"量比={vol_ratio:.2f} → {vol_score:+.2f}")
 
     # === PVR ===
@@ -833,7 +836,7 @@ def detect_rule3(idx, row, df):
     elif is_top and pvr > 2:
         pvr_score -= top_penalty
     pvr_score = np.clip(pvr_score, -1, 1)
-    score += pvr_score * weights['PVR']
+    score += pvr_score * base_weights['PVR'] * date_weight
     reasons.append(f"PVR={pvr:.2f} → {pvr_score:+.2f}")
 
     # === MACD ===
@@ -843,49 +846,40 @@ def detect_rule3(idx, row, df):
     elif is_top and macd_strength > 0 and macd_strength < 0.3:
         macd_trend -= top_penalty
     macd_trend = np.clip(macd_trend, -1, 1)
-    score += macd_trend * weights['MACD']
+    score += macd_trend * base_weights['MACD'] * date_weight
     reasons.append(f"MACD差={macd_strength:.4f} → {macd_trend:+.2f}")
 
     # === 量價行為判斷 ===
-    # 無量下跌
     low_volume_down = (diff_price < 0.3) and (vol_ratio < 0.8) and (pvr < 0)
     if low_volume_down:
         score += bottom_boost
         reasons.append("無量下跌 → 偏多加分")
 
-    # 價跌量縮
     if (diff_price < 0) and (vol_ratio < 0.7) and (pvr < 0):
         score += bottom_boost * 0.8
         reasons.append("價跌量縮 → 籌碼沉澱")
 
-    # 價漲量縮
     if (diff_price > 0) and (vol_ratio < 0.8) and (pvr > 1):
         score -= top_penalty * 0.5
         reasons.append("價漲量縮 → 假反彈")
 
-    # 價跌量增
     if (diff_price < 0) and (vol_ratio > 1.5):
-        if is_bottom:
-            score += bottom_boost * 0.5
-        else:
-            score -= top_penalty * 0.6
+        score += bottom_boost * 0.5 if is_bottom else -top_penalty * 0.6
         reasons.append("價跌量增 → 量價異常")
 
-    # 價漲量增
     if (diff_price > 0) and (vol_ratio > 1.5) and (pvr > 0):
         score += bottom_boost * 0.6
         reasons.append("價漲量增 → 多頭啟動")
 
-    # RSI 背離
     if idx >= 2:
         prev_close = df.at[idx - 1, 'close']
-        prev_rsi = df.at[idx - 1, 'RSI']
-        if (row['close'] < prev_close) and (row['RSI'] > prev_rsi):
+        prev_rsi_val = df.at[idx - 1, 'RSI']
+        if (row['close'] < prev_close) and (row['RSI'] > prev_rsi_val):
             score += bottom_boost * 0.7
             reasons.append("RSI 背離 → 底部反轉")
 
     # === 分數標準化 ===
-    max_possible = sum(weights.values())
+    max_possible = sum(base_weights.values())
     final_score = np.clip(score / max_possible, -1, 1) * 100
     upper_thresh, lower_thresh = 30, -30
     if is_top: upper_thresh = 25
@@ -903,13 +897,14 @@ def detect_rule3(idx, row, df):
 
     reason = f"★ {label} ({final_score:+.1f}%) | " + ", ".join(reasons)
 
+    # 更新 DataFrame
     if abs(row['diffPvr']) > abs(row['avgPvr'] * 2):
         df.at[idx, 'trand'] = trand
         df.at[idx, 'score'] = round(final_score, 2)
         df.at[idx, 'reason'] = reason
 
-    current_date = datetime.now()
-    date_difference = current_date - datetime.strptime(str(row['priceDate']), '%Y-%m-%d')
+    # 推薦股票
+    date_difference = current_date - price_date
     if date_difference.days <= rec_days:
         if trand > 0.5:
             stock_exists = any(stock['stockCode'] == stock_code for stock in rec_stocks)
@@ -917,12 +912,14 @@ def detect_rule3(idx, row, df):
                 rec_stocks.append(
                     {'stockCode': row['stockCode'], 'stockName': row['stockName'], 'volume': row['volume'],
                      'reason': reason})
+
     return trand, final_score, reason
 
 
 # ===================== 主流程 =====================
 def main():
     for master in codes:
+        DailySchedule(stock_kind=master['stockKind'], stock_code=master['stockCode'], isin_code=None) # 更新T,T-1資料
         details = MySQL.get_price(master['stockCode'], analyse_days, 'asc')
         details = humps.camelize(details)
         if not details:
