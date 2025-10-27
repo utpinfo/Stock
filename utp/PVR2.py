@@ -21,7 +21,7 @@ expanding: 行累積合計(階段合計)
 """
 decimal_place = 2
 analyse_days = 90
-stock_code = []
+stock_code = [6176]
 codes = MySQL.get_stock(stock_status=90, stock_code=stock_code)  # 股票列表
 codes = humps.camelize(codes)
 sns.set_theme(style="whitegrid")
